@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clstr"
+version = "0.1.0"
+description = "Closed-loop Latent Skill Transition Router"
+requires-python = ">=3.11"
+dependencies = [
+  "torch",
+  "transformers>=4.51.0",
+  "numpy",
+  "PyYAML",
+  "tqdm",
+  "sentencepiece",
+  "safetensors",
+]
+
+[tool.setuptools.packages.find]
+include = ["clstr*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

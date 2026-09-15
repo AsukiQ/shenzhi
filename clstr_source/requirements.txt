@@ -1,0 +1,8 @@
+torch
+transformers>=4.51.0
+numpy
+PyYAML
+tqdm
+sentencepiece
+safetensors
+pytest

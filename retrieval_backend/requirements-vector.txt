@@ -1,0 +1,5 @@
+# Optional dependencies for Qwen Embedding + Zilliz. The BM25/Neo4j service
+# does not require these packages and should not install them unless vector
+# ingestion or retrieval is being enabled.
+pymilvus>=2.4,<3
+requests>=2.31

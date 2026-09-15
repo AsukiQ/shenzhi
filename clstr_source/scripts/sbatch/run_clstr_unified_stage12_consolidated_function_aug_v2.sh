@@ -1,0 +1,185 @@
+#!/bin/bash
+#SBATCH --time=12:00:00
+set -euo pipefail
+
+PROJECT_ROOT=${PROJECT_ROOT:-/data/home/scyb713/run/xzf/AAAI/autodl-tmp/clstr}
+source "${PROJECT_ROOT}/scripts/sbatch/_clstr_gpu_env.sh"
+
+TRAIN_PATH=${TRAIN_PATH:-data/clstr_unified_pretrain_v4_2_progressive_final_function_aug_v2_toolbench_clean/trajectories.jsonl}
+SKILLS_PATH=${SKILLS_PATH:-data/clstr_unified_pretrain_v4_2_progressive_final_function_aug_v2_toolbench_clean/skill_pool.jsonl}
+OUTPUT_DIR=${OUTPUT_DIR:-outputs/clstr_unified_stage12_function_aug_v2_toolbench_clean_quota_b16_consolidated}
+ROUTING_CHECKPOINT_PATH=${ROUTING_CHECKPOINT_PATH:?ROUTING_CHECKPOINT_PATH must point to the selected Stage0 checkpoint}
+STAGE0_HANDOFF_GATE_PATH=${STAGE0_HANDOFF_GATE_PATH:-}
+
+STAGE1_MAX_STEPS=${STAGE1_MAX_STEPS:-3000}
+STAGE2_MAX_STEPS=${STAGE2_MAX_STEPS:-10000}
+BATCH_SIZE=${BATCH_SIZE:-16}
+LEARNING_RATE=${LEARNING_RATE:-1.0e-4}
+MAX_ROWS=${MAX_ROWS:-}
+ALLOWED_BENCHMARKS=${ALLOWED_BENCHMARKS:-toolbench_g3,traject_bench,alfworld,webshop}
+BENCHMARK_CAPS=${BENCHMARK_CAPS:-toolbench_g3=-1:traject_bench=-1:alfworld=-1:webshop=-1}
+BENCHMARK_CAPS="${BENCHMARK_CAPS//:/,}"
+
+STAGE0_TOP_M=${STAGE0_TOP_M:-500}
+STAGE0_POSITIVE_MISSING_POLICY=${STAGE0_POSITIVE_MISSING_POLICY:-skip}
+STAGE0_HANDOFF_SAMPLE_MULTIPLIER=${STAGE0_HANDOFF_SAMPLE_MULTIPLIER:-4}
+STAGE0_CANDIDATE_ENCODE_BATCH_SIZE=${STAGE0_CANDIDATE_ENCODE_BATCH_SIZE:-16}
+STAGE0_CANDIDATE_PROGRESS_INTERVAL_BATCHES=${STAGE0_CANDIDATE_PROGRESS_INTERVAL_BATCHES:-50}
+STAGE0_HANDOFF_CACHE_MODE=${STAGE0_HANDOFF_CACHE_MODE:-auto}
+STAGE0_HANDOFF_CACHE_DIR=${STAGE0_HANDOFF_CACHE_DIR:-outputs/cache/stage0_handoff}
+
+TRANSITION_INVENTORY_MASK_MODE=${TRANSITION_INVENTORY_MASK_MODE:-explicit_only}
+TRANSITION_INVENTORY_MIN_CANDIDATES=${TRANSITION_INVENTORY_MIN_CANDIDATES:-50}
+TRANSITION_LOSS_TYPE=${TRANSITION_LOSS_TYPE:-listwise_nll}
+TRANSITION_POSITIVE_MODE=${TRANSITION_POSITIVE_MODE:-gold_plus_equivalent}
+TRANSITION_RESIDUAL_LAMBDA=${TRANSITION_RESIDUAL_LAMBDA:-0.25}
+TRANSITION_SCORING_MODE=${TRANSITION_SCORING_MODE:-stage0_rank_prior_plus_transition_residual}
+ROUTE_SCORER=${ROUTE_SCORER:-unified_memory}
+NEXT_SKILL_POOL_MODE=${NEXT_SKILL_POOL_MODE:-full_pool}
+COUNTERFACTUAL_GAIN_MARGIN=${COUNTERFACTUAL_GAIN_MARGIN:-0.1}
+COUNTERFACTUAL_SAFETY_TOLERANCE=${COUNTERFACTUAL_SAFETY_TOLERANCE:-0.01}
+COUNTERFACTUAL_GAIN_WEIGHT=${COUNTERFACTUAL_GAIN_WEIGHT:-1.0}
+COUNTERFACTUAL_SAFETY_WEIGHT=${COUNTERFACTUAL_SAFETY_WEIGHT:-1.0}
+COUNTERFACTUAL_WARMUP_FRACTION=${COUNTERFACTUAL_WARMUP_FRACTION:-0.1}
+GATED_TEMPORAL_LAMBDA_MAX=${GATED_TEMPORAL_LAMBDA_MAX:-0.5}
+GATED_TEMPORAL_KL_ALPHA=${GATED_TEMPORAL_KL_ALPHA:-0.03}
+GATED_TEMPORAL_RANK_DROP_BETA=${GATED_TEMPORAL_RANK_DROP_BETA:-0.05}
+GATED_TEMPORAL_CONTEXT_TOP_K=${GATED_TEMPORAL_CONTEXT_TOP_K:-64}
+STAGE0_SCORE_PRIOR_CALIBRATION=${STAGE0_SCORE_PRIOR_CALIBRATION:-off}
+FREEZE_GATED_TEMPORAL_ONLY=${FREEZE_GATED_TEMPORAL_ONLY:-true}
+STAGE1_FREEZE_GATED_TEMPORAL_ONLY=${STAGE1_FREEZE_GATED_TEMPORAL_ONLY:-auto}
+STAGE2_FREEZE_GATED_TEMPORAL_ONLY=${STAGE2_FREEZE_GATED_TEMPORAL_ONLY:-auto}
+SAMPLING_STRATEGY=${SAMPLING_STRATEGY:-benchmark_transition_quota_random}
+AUTO_REPLAY_PREFIX_MAX_STEPS=${AUTO_REPLAY_PREFIX_MAX_STEPS:-3}
+TRAINABLE_REPLAY_PREFIX=${TRAINABLE_REPLAY_PREFIX:-true}
+STAGE1_AUTO_REPLAY_PREFIX_MAX_STEPS=${STAGE1_AUTO_REPLAY_PREFIX_MAX_STEPS:-0}
+STAGE2_AUTO_REPLAY_PREFIX_MAX_STEPS=${STAGE2_AUTO_REPLAY_PREFIX_MAX_STEPS:-${AUTO_REPLAY_PREFIX_MAX_STEPS}}
+STAGE1_TRAINABLE_REPLAY_PREFIX=${STAGE1_TRAINABLE_REPLAY_PREFIX:-false}
+STAGE2_TRAINABLE_REPLAY_PREFIX=${STAGE2_TRAINABLE_REPLAY_PREFIX:-${TRAINABLE_REPLAY_PREFIX}}
+
+STAGE1_POLICY_LOSS_WEIGHT=${STAGE1_POLICY_LOSS_WEIGHT:-0.6}
+STAGE1_TRANSITION_LOSS_WEIGHT=${STAGE1_TRANSITION_LOSS_WEIGHT:-0.2}
+STAGE1_TRANSITION_SKILL_CE_LOSS_WEIGHT=${STAGE1_TRANSITION_SKILL_CE_LOSS_WEIGHT:-0.6}
+STAGE2_POLICY_LOSS_WEIGHT=${STAGE2_POLICY_LOSS_WEIGHT:-0.2}
+STAGE2_TRANSITION_LOSS_WEIGHT=${STAGE2_TRANSITION_LOSS_WEIGHT:-0.3}
+STAGE2_TRANSITION_SKILL_CE_LOSS_WEIGHT=${STAGE2_TRANSITION_SKILL_CE_LOSS_WEIGHT:-1.0}
+STAGE2_COUNTERFACTUAL_UTILITY_LOSS_WEIGHT=${STAGE2_COUNTERFACTUAL_UTILITY_LOSS_WEIGHT:-0.05}
+
+STAGE1_GATE_FIRST_WINDOW=${STAGE1_GATE_FIRST_WINDOW:-100}
+STAGE1_GATE_LAST_WINDOW=${STAGE1_GATE_LAST_WINDOW:-100}
+STAGE1_GATE_MIN_LOSS_DROP=${STAGE1_GATE_MIN_LOSS_DROP:-0.0}
+STAGE1_GATE_MIN_TRANSITION_RECALL_AT_1_TAIL=${STAGE1_GATE_MIN_TRANSITION_RECALL_AT_1_TAIL:-0.35}
+STAGE1_GATE_MIN_TRANSITION_RECALL_AT_5_TAIL=${STAGE1_GATE_MIN_TRANSITION_RECALL_AT_5_TAIL:-0.65}
+STAGE2_GATE_FIRST_WINDOW=${STAGE2_GATE_FIRST_WINDOW:-200}
+STAGE2_GATE_LAST_WINDOW=${STAGE2_GATE_LAST_WINDOW:-200}
+STAGE2_GATE_MIN_LOSS_DROP=${STAGE2_GATE_MIN_LOSS_DROP:-0.02}
+STAGE2_GATE_MIN_TRANSITION_RECALL_AT_5_TAIL=${STAGE2_GATE_MIN_TRANSITION_RECALL_AT_5_TAIL:-0.5}
+STAGE2_GATE_MAX_RECALL_AT_5_DROP_VS_STAGE0_PRIOR=${STAGE2_GATE_MAX_RECALL_AT_5_DROP_VS_STAGE0_PRIOR:-0.03}
+STAGE2_GATE_MAX_MRR_DROP_VS_STAGE0_PRIOR=${STAGE2_GATE_MAX_MRR_DROP_VS_STAGE0_PRIOR:-0.01}
+STAGE2_GATE_MAX_WORSE_THAN_STAGE0_PRIOR_FRACTION=${STAGE2_GATE_MAX_WORSE_THAN_STAGE0_PRIOR_FRACTION:-0.5}
+
+if [[ -s "${ROUTING_CHECKPOINT_PATH}" ]]; then
+  :
+else
+  echo "ERROR: consolidated Stage1/2 requires completed Stage0 checkpoint: ${ROUTING_CHECKPOINT_PATH}" >&2
+  exit 2
+fi
+
+if [[ -n "${STAGE0_HANDOFF_GATE_PATH}" ]]; then
+  "${PYTHON_BIN}" - "${STAGE0_HANDOFF_GATE_PATH}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text(encoding="utf-8"))
+if payload.get("status") != "ok":
+    print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+    raise SystemExit(f"Stage0 handoff gate is not ok: {path}")
+print(json.dumps({"status": "ok", "stage0_handoff_gate": str(path)}, ensure_ascii=False))
+PY
+fi
+
+mkdir -p "${OUTPUT_DIR}"
+
+ARGS=(
+  scripts/run_clstr_stage12_consolidated_train.py
+  --train_path "${TRAIN_PATH}"
+  --skills_path "${SKILLS_PATH}"
+  --output_dir "${OUTPUT_DIR}"
+  --routing_checkpoint_path "${ROUTING_CHECKPOINT_PATH}"
+  --stage1_max_steps "${STAGE1_MAX_STEPS}"
+  --stage2_max_steps "${STAGE2_MAX_STEPS}"
+  --batch_size "${BATCH_SIZE}"
+  --learning_rate "${LEARNING_RATE}"
+  --allowed_benchmarks "${ALLOWED_BENCHMARKS}"
+  --benchmark_caps "${BENCHMARK_CAPS}"
+  --stage0_top_m "${STAGE0_TOP_M}"
+  --stage0_positive_missing_policy "${STAGE0_POSITIVE_MISSING_POLICY}"
+  --stage0_handoff_sample_multiplier "${STAGE0_HANDOFF_SAMPLE_MULTIPLIER}"
+  --stage0_candidate_encode_batch_size "${STAGE0_CANDIDATE_ENCODE_BATCH_SIZE}"
+  --stage0_candidate_progress_interval_batches "${STAGE0_CANDIDATE_PROGRESS_INTERVAL_BATCHES}"
+  --stage0_handoff_cache_mode "${STAGE0_HANDOFF_CACHE_MODE}"
+  --stage0_handoff_cache_dir "${STAGE0_HANDOFF_CACHE_DIR}"
+  --transition_inventory_mask_mode "${TRANSITION_INVENTORY_MASK_MODE}"
+  --transition_inventory_min_candidates "${TRANSITION_INVENTORY_MIN_CANDIDATES}"
+  --transition_loss_type "${TRANSITION_LOSS_TYPE}"
+  --transition_positive_mode "${TRANSITION_POSITIVE_MODE}"
+  --transition_residual_lambda "${TRANSITION_RESIDUAL_LAMBDA}"
+  --transition_scoring_mode "${TRANSITION_SCORING_MODE}"
+  --route_scorer "${ROUTE_SCORER}"
+  --next_skill_pool_mode "${NEXT_SKILL_POOL_MODE}"
+  --counterfactual_gain_margin "${COUNTERFACTUAL_GAIN_MARGIN}"
+  --counterfactual_safety_tolerance "${COUNTERFACTUAL_SAFETY_TOLERANCE}"
+  --counterfactual_gain_weight "${COUNTERFACTUAL_GAIN_WEIGHT}"
+  --counterfactual_safety_weight "${COUNTERFACTUAL_SAFETY_WEIGHT}"
+  --counterfactual_warmup_fraction "${COUNTERFACTUAL_WARMUP_FRACTION}"
+  --gated_temporal_lambda_max "${GATED_TEMPORAL_LAMBDA_MAX}"
+  --gated_temporal_kl_alpha "${GATED_TEMPORAL_KL_ALPHA}"
+  --gated_temporal_rank_drop_beta "${GATED_TEMPORAL_RANK_DROP_BETA}"
+  --gated_temporal_context_top_k "${GATED_TEMPORAL_CONTEXT_TOP_K}"
+  --stage0_score_prior_calibration "${STAGE0_SCORE_PRIOR_CALIBRATION}"
+  --stage1_freeze_gated_temporal_only "${STAGE1_FREEZE_GATED_TEMPORAL_ONLY}"
+  --stage2_freeze_gated_temporal_only "${STAGE2_FREEZE_GATED_TEMPORAL_ONLY}"
+  --sampling_strategy "${SAMPLING_STRATEGY}"
+  --stage1_policy_loss_weight "${STAGE1_POLICY_LOSS_WEIGHT}"
+  --stage1_transition_loss_weight "${STAGE1_TRANSITION_LOSS_WEIGHT}"
+  --stage1_transition_skill_ce_loss_weight "${STAGE1_TRANSITION_SKILL_CE_LOSS_WEIGHT}"
+  --stage2_policy_loss_weight "${STAGE2_POLICY_LOSS_WEIGHT}"
+  --stage2_transition_loss_weight "${STAGE2_TRANSITION_LOSS_WEIGHT}"
+  --stage2_transition_skill_ce_loss_weight "${STAGE2_TRANSITION_SKILL_CE_LOSS_WEIGHT}"
+  --stage2_counterfactual_utility_loss_weight "${STAGE2_COUNTERFACTUAL_UTILITY_LOSS_WEIGHT}"
+  --stage1_gate_first_window "${STAGE1_GATE_FIRST_WINDOW}"
+  --stage1_gate_last_window "${STAGE1_GATE_LAST_WINDOW}"
+  --stage1_gate_min_loss_drop "${STAGE1_GATE_MIN_LOSS_DROP}"
+  --stage1_gate_min_transition_recall_at_1_tail "${STAGE1_GATE_MIN_TRANSITION_RECALL_AT_1_TAIL}"
+  --stage1_gate_min_transition_recall_at_5_tail "${STAGE1_GATE_MIN_TRANSITION_RECALL_AT_5_TAIL}"
+  --stage2_gate_first_window "${STAGE2_GATE_FIRST_WINDOW}"
+  --stage2_gate_last_window "${STAGE2_GATE_LAST_WINDOW}"
+  --stage2_gate_min_loss_drop "${STAGE2_GATE_MIN_LOSS_DROP}"
+  --stage2_gate_min_transition_recall_at_5_tail "${STAGE2_GATE_MIN_TRANSITION_RECALL_AT_5_TAIL}"
+  --stage2_gate_max_recall_at_5_drop_vs_stage0_prior "${STAGE2_GATE_MAX_RECALL_AT_5_DROP_VS_STAGE0_PRIOR}"
+  --stage2_gate_max_mrr_drop_vs_stage0_prior "${STAGE2_GATE_MAX_MRR_DROP_VS_STAGE0_PRIOR}"
+  --stage2_gate_max_worse_than_stage0_prior_fraction "${STAGE2_GATE_MAX_WORSE_THAN_STAGE0_PRIOR_FRACTION}"
+  --auto_replay_prefix_max_steps "${AUTO_REPLAY_PREFIX_MAX_STEPS}"
+  --stage1_auto_replay_prefix_max_steps "${STAGE1_AUTO_REPLAY_PREFIX_MAX_STEPS}"
+  --stage2_auto_replay_prefix_max_steps "${STAGE2_AUTO_REPLAY_PREFIX_MAX_STEPS}"
+  --stage1_trainable_replay_prefix "${STAGE1_TRAINABLE_REPLAY_PREFIX}"
+  --stage2_trainable_replay_prefix "${STAGE2_TRAINABLE_REPLAY_PREFIX}"
+)
+
+if [[ -n "${MAX_ROWS}" ]]; then
+  ARGS+=(--max_rows "${MAX_ROWS}")
+fi
+
+if [[ "${FREEZE_GATED_TEMPORAL_ONLY}" == "true" || "${FREEZE_GATED_TEMPORAL_ONLY}" == "1" ]]; then
+  ARGS+=(--freeze_gated_temporal_only)
+fi
+
+if [[ "${TRAINABLE_REPLAY_PREFIX}" == "true" || "${TRAINABLE_REPLAY_PREFIX}" == "1" ]]; then
+  ARGS+=(--trainable_replay_prefix)
+fi
+
+"${PYTHON_BIN}" "${ARGS[@]}" | tee "${OUTPUT_DIR}/train_stdout.json"

@@ -1,0 +1,15 @@
+provider: anthropic_compatible
+base_url: "https://your-proxy.example.com/"
+model: "claude-opus-4-7[1m]"
+
+# Keep the real key in .env.local. Do not put secrets in this YAML.
+api_key_env: CLSTR_AGENT_API_KEY
+
+max_turns_per_task: 80
+max_retries_per_task: 2
+timeout_seconds: 3600
+temperature: 0.2
+
+skillsbench_root: /root/autodl-tmp/skillsbench
+output_root: /root/autodl-tmp/skillsbench/results
+clstr_harness_output_dir: /root/autodl-tmp/clstr/data/skillsbench_harness_results

@@ -1,0 +1,44 @@
+# Runtime data and generated artifacts
+*.db
+*.db-*
+*.tar.gz
+*.zip
+*.log
+*.jsonl
+__pycache__/
+*/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+models/
+outputs/
+backups/
+graph_data/
+graph_candidates/
+local_merge_package_*/
+merge_handoff/
+clstr_source/.cache/
+clstr_source/outputs/
+clstr_source/artifacts/
+clstr_source/logs/
+retrieval_backend/data/*
+retrieval_backend/data/.gitkeep
+
+# Credentials and machine-specific deployment files
+**/.env
+**/.env.*
+retrieval_backend/deployment/paperddl.env.bm25
+retrieval_backend/deployment/paperddl.env.hybrid
+retrieval_backend/deployment/*.json
+retrieval_backend/deployment/*.yml
+retrieval_backend/deployment/*.yaml
+
+# Local planning/session state
+.planning/
+
+# Local release/smoke metadata
+*.smoke.json
+*_smoke.json
+release_manifest.json
+.merged-review-path
