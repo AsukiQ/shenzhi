@@ -49,6 +49,12 @@ WHERE p IS NULL OR (
     WHERE any(wanted IN $subject
       WHERE toLower(coalesce(s.name, '')) CONTAINS toLower(wanted))
   })
+  AND (size($institution) = 0 OR EXISTS {
+    MATCH (p)-[:AUTHORED_BY]->(a:Author)-[:AFFILIATED_WITH]-(i:Institution)
+    WHERE any(wanted IN $institution
+      WHERE toLower(coalesce(i.name, '')) CONTAINS toLower(wanted)
+         OR toLower(coalesce(i.institution_id, '')) CONTAINS toLower(wanted))
+  })
 )
 RETURN requested_id AS paper_id, candidate_index
 ORDER BY candidate_index
@@ -106,12 +112,12 @@ class Neo4jPaperFilter:
 
     def healthcheck(self) -> dict[str, Any]:
         with self.driver.session(database=self.database) as session:
-            row = session.run(
-                "MATCH (p:Paper) RETURN count(p) AS paper_count"
-            ).single()
+            row = session.run("MATCH (p:Paper) RETURN count(p) AS paper_count").single()
+            funding = session.run("MATCH (f:Funding) RETURN count(f) AS funding_count").single()
         return {
             "status": "ok",
             "paper_count": int(row["paper_count"]),
+            "funding_count": int(funding["funding_count"]),
             "database": self.database,
         }
 
@@ -131,6 +137,7 @@ class Neo4jPaperFilter:
             "author": list(filters.author),
             "keyword": list(filters.keyword),
             "subject": list(filters.subject),
+            "institution": list(filters.institution),
         }
         with self.driver.session(database=self.database) as session:
             rows = session.run(FILTER_CYPHER, **params)
@@ -233,16 +240,126 @@ class Neo4jHttpPaperFilter:
     def close(self) -> None:
         return None
 
-    def healthcheck(self) -> dict[str, Any]:
-        rows = self._run(
-            "MATCH (p:Paper) RETURN count(p) AS paper_count",
-            {},
+    def funding_search(self, query: str = "", *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        """Search funding entities, counting distinct linked papers."""
+        limit, offset = int(limit), int(offset)
+        if not 1 <= limit <= 100 or offset < 0:
+            raise ValueError("limit must be 1..100 and offset must be >= 0")
+        return self._run(
+            """
+            MATCH (f:Funding)
+            WHERE $query = '' OR toLower(coalesce(f.name, '')) CONTAINS toLower($query)
+               OR toLower(coalesce(f.funding_id, '')) CONTAINS toLower($query)
+            OPTIONAL MATCH (p:Paper)-[:FUNDED_BY]->(f)
+            RETURN f.funding_id AS funding_id, coalesce(f.name, f.funding_id) AS name,
+                   count(DISTINCT p) AS paper_count
+            ORDER BY paper_count DESC, name, funding_id
+            SKIP $offset LIMIT $limit
+            """,
+            {"query": str(query or '').strip(), "limit": limit, "offset": offset},
         )
+
+    def institution_search(self, query: str = "", *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        query = str(query or '').strip()
+        rows = self._run(
+            """
+            MATCH (i:Institution)
+            WHERE $query = '' OR toLower(coalesce(i.name, '')) CONTAINS toLower($query)
+               OR toLower(coalesce(i.institution_id, '')) CONTAINS toLower($query)
+            OPTIONAL MATCH (p:Paper)-[:AUTHORED_BY]->(:Author)-[:AFFILIATED_WITH]-(i)
+            RETURN coalesce(i.institution_id, i.id) AS institution_id,
+                   coalesce(i.name, i.institution_id, i.id) AS name,
+                   count(DISTINCT p) AS paper_count
+            ORDER BY paper_count DESC, name, institution_id
+            SKIP $offset LIMIT $limit
+            """,
+            {"query": query, "offset": max(0, int(offset)), "limit": max(1, min(100, int(limit)))},
+        )
+        return rows
+
+    def scholar_search(self, query: str = "", *, subject: str = "", funding: str = "", limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        """Find authors by name, topic, and/or funding substring."""
+        query = str(query or '').strip()
+        subject = str(subject or '').strip()
+        funding = str(funding or '').strip()
+        if subject and not query and not funding:
+            statement = """
+            MATCH (p:Paper)-[:HAS_TOPIC]->(t:Topic)
+            WHERE toLower(coalesce(t.name, '')) CONTAINS toLower($subject)
+            MATCH (p)-[:AUTHORED_BY]->(a:Author)
+            WITH a, count(DISTINCT p) AS paper_count
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name, paper_count
+            ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
+            """
+        elif funding and not query and not subject:
+            statement = """
+            MATCH (p:Paper)-[:FUNDED_BY]->(f:Funding)
+            WHERE toLower(coalesce(f.name, '')) CONTAINS toLower($funding)
+            MATCH (p)-[:AUTHORED_BY]->(a:Author)
+            WITH a, count(DISTINCT p) AS paper_count
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name, paper_count
+            ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
+            """
+        else:
+            statement = """
+            MATCH (a:Author)
+            WHERE ($query = '' OR toLower(coalesce(a.name, '')) CONTAINS toLower($query)
+                   OR toLower(coalesce(a.author_id, '')) CONTAINS toLower($query))
+            OPTIONAL MATCH (p:Paper)-[:AUTHORED_BY]->(a)
+            WITH a, collect(DISTINCT p) AS papers
+            WHERE ($subject = '' OR any(paper IN papers WHERE EXISTS {
+              MATCH (paper)-[:HAS_TOPIC]->(t:Topic)
+              WHERE toLower(coalesce(t.name, '')) CONTAINS toLower($subject)
+            }))
+            AND ($funding = '' OR any(paper IN papers WHERE EXISTS {
+              MATCH (paper)-[:FUNDED_BY]->(f:Funding)
+              WHERE toLower(coalesce(f.name, '')) CONTAINS toLower($funding)
+            }))
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name, size(papers) AS paper_count
+            ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
+            """
+        return self._run(
+            statement,
+            {"query": query, "subject": subject, "funding": funding, "offset": max(0, int(offset)), "limit": max(1, min(100, int(limit)))},
+        )
+
+    def scholar_detail(self, scholar_id: str, *, paper_limit: int = 50) -> dict[str, Any] | None:
+        rows = self._run(
+            """
+            MATCH (a:Author {author_id: $scholar_id})
+            OPTIONAL MATCH (p:Paper)-[:AUTHORED_BY]->(a)
+            WITH a, collect(DISTINCT p) AS papers
+            OPTIONAL MATCH (a)-[:AFFILIATED_WITH]-(i:Institution)
+            WITH a, papers, collect(DISTINCT coalesce(i.name, i.institution_id)) AS institutions
+            UNWIND CASE WHEN size(papers) = 0 THEN [null] ELSE papers END AS p
+            OPTIONAL MATCH (p)-[:PUBLISHED_IN]->(c:Conference)
+            OPTIONAL MATCH (p)-[:HAS_TOPIC]->(t:Topic)
+            OPTIONAL MATCH (p)-[:FUNDED_BY]->(f:Funding)
+            WITH a, papers, institutions, collect(DISTINCT coalesce(c.name, c.venue)) AS conferences,
+                 collect(DISTINCT t.name) AS topics, collect(DISTINCT f.name) AS funding
+            UNWIND CASE WHEN size(papers) = 0 THEN [null] ELSE papers END AS pp
+            OPTIONAL MATCH (pp)-[:AUTHORED_BY]->(co:Author)
+            WITH a, papers, institutions, conferences, topics, funding,
+                 collect(DISTINCT CASE WHEN co.author_id <> a.author_id THEN {scholar_id: co.author_id, name: co.name} END) AS coauthors
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name,
+                   institutions, size(papers) AS paper_count,
+                   [x IN papers WHERE x IS NOT NULL | x.year] AS years,
+                   conferences, topics, funding, coauthors,
+                   [x IN papers WHERE x IS NOT NULL | {paper_id:x.paper_id, title:x.title, year:x.year}] [0..$paper_limit] AS papers
+            """,
+            {"scholar_id": str(scholar_id), "paper_limit": max(1, min(200, int(paper_limit)))},
+        )
+        return rows[0] if rows else None
+
+    def healthcheck(self) -> dict[str, Any]:
+        rows = self._run("MATCH (p:Paper) RETURN count(p) AS paper_count", {})
+        funding_rows = self._run("MATCH (f:Funding) RETURN count(f) AS funding_count", {})
         if not rows:
             raise RuntimeError("Neo4j HTTP healthcheck returned no rows")
         return {
             "status": "ok",
             "paper_count": int(rows[0]["paper_count"]),
+            "funding_count": int(funding_rows[0]["funding_count"]),
             "database": self.database,
         }
 
@@ -264,6 +381,7 @@ class Neo4jHttpPaperFilter:
                 "author": list(filters.author),
                 "keyword": list(filters.keyword),
                 "subject": list(filters.subject),
+                "institution": list(filters.institution),
             },
         )
         return [str(row["paper_id"]) for row in rows]

@@ -8,7 +8,7 @@ import os
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, unquote
 
 try:  # 作为模块运行和直接运行两种方式都支持
     from .paper_search import PaperSearchIndex, SearchFilters, state_to_dict
@@ -66,12 +66,15 @@ def _request_payload(path: str, body: bytes = b"") -> dict:
     return {
         "query": _one(params, "q") or _one(params, "query") or "",
         "top_k": int(_one(params, "top_k") or 10),
+        "offset": int(_one(params, "offset") or 0),
+        "limit": int(_one(params, "limit") or 10),
         "year_gte": int(_one(params, "year_gte")) if _one(params, "year_gte") else None,
         "year_lte": int(_one(params, "year_lte")) if _one(params, "year_lte") else None,
         "conference": params.get("conference", []),
         "author": params.get("author", []),
         "keyword": params.get("keyword", []),
         "subject": params.get("subject", []),
+        "institution": params.get("institution", []),
     }
 
 
@@ -79,6 +82,7 @@ def make_handler(
     index,
     stage2_policy=None,
     *,
+    graph=None,
     max_body_bytes: int = 1_048_576,
     request_timeout: float = 30.0,
     auth_token: str | None = None,
@@ -117,14 +121,125 @@ def make_handler(
             if not self._require_auth():
                 return
             request_path = urlparse(self.path).path
+            # Demo/legacy compatibility: accept the documented API prefixes.
+            if request_path.startswith('/api/retrieval/'):
+                request_path = request_path[len('/api/retrieval'):]
+            elif request_path.startswith('/api/knowledge/'):
+                request_path = request_path[len('/api'):]
+            elif request_path == '/api/kg/search':
+                request_path = '/search'
+            if request_path == "/knowledge/papers/summary":
+                try:
+                    health = index.healthcheck()
+                    lexical = health.get("lexical", health)
+                    self._send(200, {"paper_count": int(lexical.get("paper_count", 0))})
+                except Exception as exc:
+                    self._send(500, {"error": "paper summary failed", "type": type(exc).__name__})
+                return
+            if request_path == "/knowledge/research-assets/summary":
+                try:
+                    health = graph.healthcheck() if graph is not None else {}
+                    count = int(health.get("funding_count", 0))
+                    self._send(200, {"research_asset_count": count})
+                except Exception as exc:
+                    self._send(500, {"error": "research asset summary failed", "type": type(exc).__name__})
+                return
+            if request_path in {"/scholars/search"}:
+                if graph is None or not hasattr(graph, "scholar_search"):
+                    self._send(503, {"error": "scholar search unavailable"})
+                    return
+                params = parse_qs(urlparse(self.path).query)
+                query = _one(params, "q") or _one(params, "query") or ""
+                subject = _one(params, "subject") or ""
+                funding = _one(params, "funding") or ""
+                try:
+                    rows = graph.scholar_search(query, subject=subject, funding=funding, limit=int(_one(params, "limit") or 20), offset=int(_one(params, "offset") or 0))
+                    self._send(200, {"results": rows, "query": query})
+                except (ValueError, TypeError) as exc:
+                    self._send(400, {"error": str(exc)})
+                except Exception as exc:
+                    self._send(500, {"error": "scholar search failed", "type": type(exc).__name__})
+                return
+            if request_path == "/fundings/search":
+                if graph is None or not hasattr(graph, "funding_search"):
+                    self._send(503, {"error": "funding search unavailable"})
+                    return
+                params = parse_qs(urlparse(self.path).query)
+                query = (_one(params, "q") or _one(params, "query") or "").strip()
+                try:
+                    rows = graph.funding_search(
+                        query, limit=int(_one(params, "limit") or 20),
+                        offset=int(_one(params, "offset") or 0),
+                    )
+                    self._send(200, {"results": rows, "query": query})
+                except (ValueError, TypeError) as exc:
+                    self._send(400, {"error": str(exc)})
+                except Exception as exc:
+                    self._send(500, {"error": "funding search failed", "type": type(exc).__name__})
+                return
+            if request_path == "/institutions/search":
+                if graph is None or not hasattr(graph, "institution_search"):
+                    self._send(503, {"error": "institution search unavailable"})
+                    return
+                params = parse_qs(urlparse(self.path).query)
+                query = _one(params, "q") or _one(params, "query") or ""
+                try:
+                    rows = graph.institution_search(
+                        query,
+                        limit=int(_one(params, "limit") or 20),
+                        offset=int(_one(params, "offset") or 0),
+                    )
+                    self._send(200, {"results": rows, "query": query})
+                except (ValueError, TypeError) as exc:
+                    self._send(400, {"error": str(exc)})
+                except Exception as exc:
+                    self._send(500, {"error": "institution search failed", "type": type(exc).__name__})
+                return
+            if request_path in {"/search/by-subject", "/search/by-funding", "/search/by-institution"}:
+                params = parse_qs(urlparse(self.path).query)
+                field_name = ("subject" if request_path.endswith("by-subject") else
+                              "institution" if request_path.endswith("by-institution") else "funding")
+                value = _one(params, field_name) or _one(params, "q") or ""
+                if not value:
+                    self._send(400, {"error": field_name + " is required"})
+                    return
+                if request_path == "/search/by-subject" and ("offset" in params or "limit" in params):
+                    try:
+                        offset = int(_one(params, "offset") or 0)
+                        limit = int(_one(params, "limit") or 10)
+                        lexical = getattr(index, "lexical_index", index)
+                        results, total = lexical.subject_page(value, offset=offset, limit=limit)
+                        self._send(200, {"results": [r.__dict__ for r in results], "total": total})
+                    except (ValueError, TypeError) as exc:
+                        self._send(400, {"error": str(exc)})
+                    except Exception as exc:
+                        self._send(500, {"error": "subject pagination failed", "type": type(exc).__name__})
+                    return
+                payload = {"query": value, "top_k": int(_one(params, "top_k") or 10)}
+                payload[field_name] = [value]
+                self._search(payload)
+                return
+            if request_path.startswith("/scholars/"):
+                if graph is None or not hasattr(graph, "scholar_detail"):
+                    self._send(503, {"error": "scholar search unavailable"})
+                    return
+                scholar_id = unquote(request_path[len("/scholars/"):].strip("/"))
+                if not scholar_id:
+                    self._send(400, {"error": "scholar_id is required"})
+                    return
+                try:
+                    result = graph.scholar_detail(scholar_id)
+                    self._send(200 if result else 404, result or {"error": "scholar not found", "scholar_id": scholar_id})
+                except Exception as exc:
+                    self._send(500, {"error": "scholar detail failed", "type": type(exc).__name__})
+                return
             if request_path.startswith("/papers/") and request_path.endswith("/images"):
-                paper_id = request_path[len("/papers/") : -len("/images")].strip("/")
+                paper_id = unquote(request_path[len("/papers/") : -len("/images")].strip("/"))
                 if not paper_id:
                     self._send(400, {"error": "paper_id is required"})
                     return
-                # Placeholder contract. Real figure extraction/storage can be
-                # added later without changing the endpoint shape.
-                self._send(200, {"paper_id": paper_id, "images": []})
+                lexical = getattr(index, "lexical_index", index)
+                self._send(200, {"paper_id": paper_id, "image_id": lexical.image_id_for(paper_id)})
                 return
             if request_path in {"/health", "/ready"}:
                 try:
@@ -149,7 +264,7 @@ def make_handler(
                     self._send(500, {"error": "query rewrite error", "type": type(exc).__name__})
                 return
             if request_path not in {"/search", "/multistep-search"}:
-                self._send(404, {"error": "use GET /search, /multistep-search, /query-rewrite, /papers/{paper_id}/images or /health"})
+                self._send(404, {"error": "use GET /search, /multistep-search, /scholars/search, /scholars/{scholar_id}, /institutions/search, /query-rewrite, /papers/{paper_id}/images or /health"})
                 return
             try:
                 payload = _request_payload(self.path)
@@ -166,6 +281,10 @@ def make_handler(
             if not self._require_auth():
                 return
             request_path = urlparse(self.path).path
+            if request_path.startswith('/api/retrieval/'):
+                request_path = request_path[len('/api/retrieval'):]
+            elif request_path == '/api/kg/search':
+                request_path = '/search'
             length = int(self.headers.get("Content-Length", "0"))
             if length < 0 or length > max_body_bytes:
                 self._send(413, {"error": "request body too large"})
@@ -194,6 +313,13 @@ def make_handler(
 
         def _search(self, payload: dict) -> None:
             query = str(payload.get("query", payload.get("q", "")))
+            paged = "offset" in payload or "limit" in payload
+            offset = int(payload.get("offset", 0) or 0)
+            limit = int(payload.get("limit", payload.get("top_k", 10)) or 10)
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+            if limit < 1 or limit > 100:
+                raise ValueError("limit must be between 1 and 100")
             parsed = parser_instance.parse(query)
             explicit_filters = SearchFilters(
                 year_gte=_int_or_none(payload.get("year_gte")),
@@ -202,6 +328,7 @@ def make_handler(
                 author=_str_list(payload.get("author")),
                 keyword=_str_list(payload.get("keyword")),
                 subject=_str_list(payload.get("subject")),
+                institution=_str_list(payload.get("institution")),
             )
             filters = merge_filters(parsed.filters, explicit_filters)
             rewrite = query_rewriter.rewrite(parsed.semantic_query) if query_rewriter else None
@@ -214,13 +341,23 @@ def make_handler(
                     "structured_only": not bool(parsed.semantic_query),
                 }
             )
+            search_k = min(1000, offset + limit) if paged else int(payload.get("top_k", 10))
             results, state = index.search(
                 query,
                 filters=filters,
-                top_k=int(payload.get("top_k", 10)),
+                top_k=search_k,
                 query_variants=variants,
             )
-            response = {"results": [r.__dict__ for r in results], "state": state_to_dict(state)}
+            if paged:
+                page = results[offset:offset + limit]
+                response = {
+                    "results": [r.__dict__ for r in page],
+                    "total": len(results),
+                    "total_exact": len(results) < 1000,
+                    "state": state_to_dict(state),
+                }
+            else:
+                response = {"results": [r.__dict__ for r in results], "state": state_to_dict(state)}
             response["query_parse"] = parsed.as_dict()
             if rewrite:
                 response["query_rewrite"] = {
@@ -239,6 +376,7 @@ def make_handler(
                 author=_str_list(payload.get("author")),
                 keyword=_str_list(payload.get("keyword")),
                 subject=_str_list(payload.get("subject")),
+                institution=_str_list(payload.get("institution")),
             )
             filters = merge_filters(parsed.filters, explicit_filters)
             rewrite = query_rewriter.rewrite(parsed.semantic_query) if query_rewriter else None
@@ -501,6 +639,7 @@ def main() -> None:
             max_body_bytes=max(1, args.max_body_bytes),
             request_timeout=max(1.0, args.request_timeout),
             auth_token=auth_token,
+            graph=graph,
             query_rewriter=query_rewriter,
             query_parser=query_parser,
         ),

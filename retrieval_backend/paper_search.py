@@ -18,6 +18,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+try:
+    from .funding_cleanup import clean_funding_name
+except ImportError:
+    from funding_cleanup import clean_funding_name
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS papers (
@@ -30,7 +35,9 @@ CREATE TABLE IF NOT EXISTS papers (
     year INTEGER,
     authors_json TEXT NOT NULL,
     keywords_json TEXT NOT NULL,
-    subjects_json TEXT NOT NULL
+    subjects_json TEXT NOT NULL,
+    funding_json TEXT NOT NULL DEFAULT '[]',
+    image_id TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
     paper_id UNINDEXED,
@@ -66,6 +73,10 @@ CREATE TABLE IF NOT EXISTS paper_subjects (
 CREATE INDEX IF NOT EXISTS idx_paper_authors_value ON paper_authors(value_key, paper_id);
 CREATE INDEX IF NOT EXISTS idx_paper_keywords_value ON paper_keywords(value_key, paper_id);
 CREATE INDEX IF NOT EXISTS idx_paper_subjects_value ON paper_subjects(value_key, paper_id);
+CREATE TABLE IF NOT EXISTS paper_funding (
+    paper_id TEXT NOT NULL, value TEXT NOT NULL, value_key TEXT NOT NULL,
+    position INTEGER NOT NULL, PRIMARY KEY (paper_id, value_key)
+);
 """
 
 RELATED_TABLES = {
@@ -140,6 +151,7 @@ class SearchFilters:
     author: list[str] = field(default_factory=list)
     keyword: list[str] = field(default_factory=list)
     subject: list[str] = field(default_factory=list)
+    institution: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -170,9 +182,8 @@ class SearchResult:
     rank: int
     source_scores: dict[str, float] = field(default_factory=dict)
     retrieval_mode: str = "bm25"
-    # Placeholder for the future PDF/figure extraction pipeline. Keeping the
-    # field stable lets clients integrate before image data is available.
-    images: list[dict[str, Any]] = field(default_factory=list)
+    image_id: str | None = None
+    funding: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -189,6 +200,16 @@ class PaperSearchIndex:
     def __init__(self, db_path: str | Path):
         self.db_path = str(db_path)
         self._local = threading.local()
+        manifest = Path(self.db_path).with_name('paper_images.json')
+        self.paper_images = json.loads(manifest.read_text(encoding='utf-8')) if manifest.is_file() else {}
+
+    def image_id_for(self, paper_id: str) -> str | None:
+        images = self.paper_images.get(paper_id) or []
+        if not images:
+            return None
+        if len(images) != 1:
+            raise ValueError(f'Multiple images for paper: {paper_id}')
+        return Path(images[0]['image_path']).name
 
     def connect(self, *, writable: bool = False) -> sqlite3.Connection:
         if writable:
@@ -205,6 +226,10 @@ class PaperSearchIndex:
         if writable:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            columns = {r[1] for r in conn.execute('PRAGMA table_info(papers)')}
+            for name, definition in [('funding_json', "TEXT NOT NULL DEFAULT '[]'"), ('image_id', 'TEXT')]:
+                if name not in columns:
+                    conn.execute(f'ALTER TABLE papers ADD COLUMN {name} {definition}')
         else:
             conn.execute("PRAGMA query_only=ON")
         return conn
@@ -250,6 +275,7 @@ class PaperSearchIndex:
                 conn.execute("DELETE FROM paper_authors")
                 conn.execute("DELETE FROM paper_keywords")
                 conn.execute("DELETE FROM paper_subjects")
+                conn.execute("DELETE FROM paper_funding")
                 conn.execute("DELETE FROM papers_fts")
                 conn.execute("DELETE FROM papers")
             count = 0
@@ -262,16 +288,20 @@ class PaperSearchIndex:
                     authors = _json_list(doc.get("authors"))
                     keywords = _json_list(doc.get("keywords"))
                     subjects = _json_list(doc.get("subjects"))
+                    funding = list(dict.fromkeys(
+                        name for raw in _json_list(doc.get("funding"))
+                        for name in clean_funding_name(raw)[0]
+                    ))
                     year = doc.get("year")
                     year = int(year) if year not in (None, "") else None
                     cur = conn.execute(
                         """INSERT OR REPLACE INTO papers
-                        (paper_id,source_id,title,abstract,conference,year,authors_json,keywords_json,subjects_json)
-                        VALUES (?,?,?,?,?,?,?,?,?)""",
+                        (paper_id,source_id,title,abstract,conference,year,authors_json,keywords_json,subjects_json,funding_json,image_id)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                         (paper_id, doc.get("source_id"), doc.get("title", ""),
                          doc.get("abstract", ""), doc.get("conference"), year,
                          json.dumps(authors, ensure_ascii=False), json.dumps(keywords, ensure_ascii=False),
-                         json.dumps(subjects, ensure_ascii=False)),
+                         json.dumps(subjects, ensure_ascii=False), json.dumps(funding, ensure_ascii=False), doc.get('image_id')),
                     )
                     # ``replace`` 模式下索引为空；同一批文档的 paper_id 已由
                     # 数据准备阶段保证唯一。为避免对 12 万条记录逐条扫描 FTS，
@@ -279,12 +309,13 @@ class PaperSearchIndex:
                     conn.execute(
                         "INSERT INTO papers_fts(paper_id,title,abstract,keywords,subjects) VALUES (?,?,?,?,?)",
                         (paper_id, _fts_text(doc.get("title")), _fts_text(doc.get("abstract")),
-                         _fts_text(" ".join(keywords)), _fts_text(" ".join(subjects))),
+                         _fts_text(" ".join(keywords)), _fts_text(" ".join(subjects + funding))),
                     )
                     for table, values in (
                         ("paper_authors", authors),
                         ("paper_keywords", keywords),
                         ("paper_subjects", subjects),
+                        ("paper_funding", funding),
                     ):
                         for position, value in enumerate(values):
                             normalized = str(value).strip()
@@ -520,6 +551,7 @@ class PaperSearchIndex:
             results.append(
                 SearchResult(
                     paper_id=paper_id,
+                    image_id=(row['image_id'] if 'image_id' in row.keys() and row['image_id'] else self.image_id_for(paper_id)),
                     title=str(row["title"]),
                     abstract=str(row["abstract"]),
                     conference=row["conference"],
@@ -527,6 +559,7 @@ class PaperSearchIndex:
                     authors=json.loads(row["authors_json"]),
                     keywords=json.loads(row["keywords_json"]),
                     subjects=json.loads(row["subjects_json"]),
+                    funding=json.loads(row["funding_json"] or "[]") if "funding_json" in row.keys() else [],
                     score=float(scores.get(paper_id, 0.0)),
                     rank=len(results) + 1,
                     source_scores={
@@ -539,6 +572,28 @@ class PaperSearchIndex:
             if limit is not None and len(results) >= limit:
                 break
         return results
+
+    def subject_page(self, subject: str, *, offset: int = 0, limit: int = 10) -> tuple[list[SearchResult], int]:
+        """Return an exact, indexed subject page and its total count."""
+        subject = str(subject or "").strip()
+        offset, limit = int(offset), int(limit)
+        if not subject:
+            raise ValueError("subject is required")
+        if offset < 0:
+            raise ValueError("offset must be >= 0")
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        conn = self.read_connection()
+        key = subject.casefold()
+        total = int(conn.execute(
+            "SELECT COUNT(DISTINCT paper_id) FROM paper_subjects WHERE value_key = ?", (key,)
+        ).fetchone()[0])
+        rows = conn.execute(
+            "SELECT paper_id FROM paper_subjects WHERE value_key = ? "
+            "GROUP BY paper_id ORDER BY paper_id LIMIT ? OFFSET ?", (key, limit, offset)
+        ).fetchall()
+        ids = [str(row[0]) for row in rows]
+        return self.fetch_results(ids, filters=SearchFilters()), total
 
     def related_values(
         self,

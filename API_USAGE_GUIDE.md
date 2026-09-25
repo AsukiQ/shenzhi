@@ -28,7 +28,9 @@ POST /api/retrieval/search
 http://47.110.47.12/api/retrieval/search
 ```
 
-用于根据标题、摘要和论文元数据检索论文，支持中英文查询（中文查询十分有限）、模糊匹配和条件过滤。
+用于根据标题、摘要和论文元数据检索论文，支持中英文查询、模糊匹配和条件过滤。
+
+当前融合 BM25、模糊召回和 Zilliz 向量召回，使用 RRF 排序。主题和基金名称也参与关键词检索。
 
 请求示例：
 
@@ -49,14 +51,16 @@ http://47.110.47.12/api/retrieval/search
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `query` | string | 是 | 查询内容，支持中文和英文 |
+| `query` | string | 是 | 查询内容 |
 | `top_k` | integer | 否 | 返回数量，默认 10，建议不超过 20 |
 | `year_gte` | integer | 否 | 最早发表年份 |
 | `year_lte` | integer | 否 | 最晚发表年份 |
 | `conference` | string[] | 否 | 会议名称列表 |
 | `author` | string[] | 否 | 作者列表 |
 | `keyword` | string[] | 否 | 关键词列表 |
-| `subject` | string[] | 否 | 主题列表 |
+| `subject` | string[] | 否 | 主题过滤列表，对应结果中的 `subjects` |
+
+按基金查找时，将基金名称写入 `query`；目前没有独立的 `funding` 过滤参数。
 
 也可以使用 GET 快速查询：
 
@@ -66,20 +70,34 @@ GET /api/retrieval/search?q=graph%20neural%20network&top_k=10
 
 返回示例：
 
+以下使用库中带基金信息的论文；作者、关键词、主题仅展示部分内容，摘要及诊断信息已省略：
+
 ```json
 {
   "results": [
     {
-      "paper_id": "paper:17203_aaai:911ff38f19e8",
-      "title": "GraphMix: Improved Training of GNNs...",
-      "abstract": "We present GraphMix...",
-      "conference": "AAAI",
-      "year": 2021,
-      "authors": [],
-      "keywords": [],
-      "subjects": [],
-      "score": 0.022,
-      "rank": 1
+      "paper_id": "paper:2303.08250v5",
+      "title": "CHEEM: Continual Learning by Reuse, New, Adapt and Skip...",
+      "abstract": "To effectively manage the complexities of real-world dynamic environments...",
+      "conference": "CVPR",
+      "year": 2026,
+      "authors": ["Chinmay Savadikar", "Michelle Dai", "Tianfu Wu"],
+      "keywords": ["continual learning", "exemplar-free class-incremental learning"],
+      "subjects": ["continual learning", "neural architecture search"],
+      "funding": ["ARO Grant W911NF1810295", "NSF award CMMI-2024688"],
+      "image_id": "2303.08250v5.png",
+      "score": 0.022886949116457313,
+      "rank": 4,
+      "source_scores": {
+        "bm25_raw": 55.81359393987477,
+        "bm25_rank": 1,
+        "bm25_rrf": 0.01639344262295082,
+        "dense_raw": 0.5737422704696655,
+        "dense_rank": 94,
+        "dense_rrf": 0.006493506493506494,
+        "rrf": 0.022886949116457313
+      },
+      "retrieval_mode": "bm25+zilliz_dense"
     }
   ],
   "state": {},
@@ -89,6 +107,13 @@ GET /api/retrieval/search?q=graph%20neural%20network&top_k=10
 ```
 
 结果已按相关性排序。建议使用返回顺序或 `rank`，不要把 `score` 当成百分比。
+
+- `subjects`：来自图谱 Topic 的主题，字段名仍为 `subjects`。
+- `funding`：基金名称列表。作者、关键词、主题和基金缺失时返回 `[]`。
+- `authors`：部分作者由图谱关系回填，列表顺序不保证是论文署名顺序。
+- `image_id`：图片文件名，例如 `2305.14299v3.png`；无图为 `null`。可拼接图片 CDN 地址，不是图片二进制或完整 URL。
+- `source_scores`、`retrieval_mode`：各路召回评分及实际使用的检索方式。
+- `state`、`query_parse`、`query_rewrite`：检索过程、条件解析和查询改写信息，普通展示可忽略，实际返回不一定为空。
 
 ### 多步关系检索
 
@@ -108,7 +133,23 @@ POST /api/retrieval/multistep-search
 
 普通论文搜索优先使用 `/api/retrieval/search`。
 
-## 3. 论文详情
+## 3. 学者检索
+
+按姓名模糊搜索学者：
+
+```http
+GET /api/retrieval/scholars/search?q=Marcel%20Binz&limit=20&offset=0
+```
+
+返回稳定的 `scholar_id` 和论文数。使用该 ID 获取学者画像：
+
+```http
+GET /api/retrieval/scholars/{scholar_id}
+```
+
+画像包含论文数、年份、会议、主题、基金、机构、合作者和论文列表。`scholar_id` 必须使用搜索结果中的值，不要用姓名代替，以避免同名作者混淆。
+
+## 4. 论文详情
 
 ```http
 GET /api/kg/paper?paperId={paper_id}

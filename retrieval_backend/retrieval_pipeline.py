@@ -527,6 +527,7 @@ class HybridPaperSearch:
             or filters.author
             or filters.keyword
             or filters.subject
+            or filters.institution
         )
         # There is one static lexical route. Chinese requests are rewritten
         # before entering it; a pure metadata request uses an explicit browse
@@ -744,6 +745,7 @@ class DensePaperSearch:
             or filters.author
             or filters.keyword
             or filters.subject
+            or filters.institution
         )
         if self.graph_filter is not None and has_graph_constraints:
             ordered_ids = self.graph_filter.filter_candidate_ids(

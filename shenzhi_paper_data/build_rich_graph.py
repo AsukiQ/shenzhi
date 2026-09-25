@@ -445,6 +445,14 @@ def build_rich_graph(zip_paths: Sequence[Path], output_dir: Path) -> dict[str, A
                         props = _clean_json(node.get("properties") or {})
                         if not isinstance(props, dict):
                             raise ValueError("node properties must be an object")
+                        # Older conference exports omitted the explicit
+                        # ``external=false`` marker on the root paper.  A
+                        # paper with a real abstract and an author list is a
+                        # conservative main-paper signal; bibliography
+                        # records in these exports contain title/year only.
+                        if label == "Paper" and "external" not in props:
+                            if normalize_text(props.get("title")) and normalize_text(props.get("abstract")) and isinstance(props.get("authors"), list) and props.get("authors"):
+                                props["external"] = False
                         if safe_id != raw_node_id:
                             props.setdefault("canonical_id", raw_node_id)
                         node_occurrences[safe_id].append({"label": label, "properties": props, "source": (archive_name, member)})
@@ -460,6 +468,8 @@ def build_rich_graph(zip_paths: Sequence[Path], output_dir: Path) -> dict[str, A
                         source = local_ids.get(raw_source, raw_source)
                         target = local_ids.get(raw_target, raw_target)
                         edge_type = normalize_text(edge.get("type"))
+                        if edge_type == "HAS_AFFILIATION":
+                            edge_type = "AFFILIATED_WITH"
                         if not source or not target or edge_type not in EDGE_CONTRACT:
                             raise ValueError(f"invalid edge: {source!r}/{target!r}/{edge_type!r}")
                         if raw_source not in local_labels or raw_target not in local_labels:
@@ -467,6 +477,13 @@ def build_rich_graph(zip_paths: Sequence[Path], output_dir: Path) -> dict[str, A
                         expected = EDGE_CONTRACT[edge_type]
                         actual = (local_labels.get(raw_source), local_labels.get(raw_target))
                         if actual != expected:
+                            # Some older exports encoded paper-level
+                            # affiliations as Paper -> Institution.  The rich
+                            # schema models affiliation on Author ->
+                            # Institution, so discard only this invalid edge
+                            # while retaining the rest of the paper graph.
+                            if edge_type == "AFFILIATED_WITH" and actual == ("Paper", "Institution"):
+                                continue
                             raise ValueError(f"edge contract mismatch {edge_type}: expected {expected}, got {actual}")
                         props = _clean_json(edge.get("properties") or {})
                         if not isinstance(props, dict):

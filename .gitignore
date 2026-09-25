@@ -16,6 +16,7 @@ outputs/
 backups/
 graph_data/
 graph_candidates/
+demo_aaai2026/graph/
 local_merge_package_*/
 merge_handoff/
 clstr_source/.cache/

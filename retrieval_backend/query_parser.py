@@ -348,4 +348,5 @@ def merge_filters(parsed: SearchFilters, explicit: SearchFilters) -> SearchFilte
         author=list(dict.fromkeys(explicit.author or parsed.author)),
         keyword=list(dict.fromkeys(explicit.keyword or parsed.keyword)),
         subject=list(dict.fromkeys(explicit.subject or parsed.subject)),
+        institution=list(dict.fromkeys(explicit.institution or parsed.institution)),
     )
