@@ -21,14 +21,15 @@ const configs = [
 ];
 
 for (const config of configs) {
-  console.log(`[db-check] ${config.name}: ${config.host}:${config.port}/${config.database}`);
+  const { name, ...connectionConfig } = config;
+  console.log(`[db-check] ${name}: ${config.host}:${config.port}/${config.database}`);
   try {
-    const connection = await mysql.createConnection({ ...config, connectTimeout: 5000 });
+    const connection = await mysql.createConnection({ ...connectionConfig, connectTimeout: 5000 });
     const [rows] = await connection.execute("SELECT VERSION() AS version");
-    console.log(`[db-check] ${config.name}: connected (${rows[0].version})`);
+    console.log(`[db-check] ${name}: connected (${rows[0].version})`);
     await connection.end();
   } catch (error) {
-    console.error(`[db-check] ${config.name}: failed: ${error.message}`);
+    console.error(`[db-check] ${name}: failed: ${error.message}`);
     process.exitCode = 1;
   }
 }
