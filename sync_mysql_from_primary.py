@@ -4,7 +4,7 @@ import argparse,json,os,shlex,subprocess
 from pathlib import Path
 
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--input',required=True);ap.add_argument('--env',default='/home/user2/MKC_Paperddl/server/.env');ap.add_argument('--apply',action='store_true');ap.add_argument('--incremental',action='store_true',help='only insert paper_ids absent from MySQL');ap.add_argument('--report',required=True);args=ap.parse_args()
+ ap=argparse.ArgumentParser();ap.add_argument('--input',required=True);ap.add_argument('--env',default=str(Path(__file__).resolve().parent / 'deployment/.env'));ap.add_argument('--apply',action='store_true');ap.add_argument('--incremental',action='store_true',help='only insert paper_ids absent from MySQL');ap.add_argument('--report',required=True);args=ap.parse_args()
  rows=[];ids=set();bad=[]
  for line in Path(args.input).open():
   r=json.loads(line);pid=r.get('paper_id','')

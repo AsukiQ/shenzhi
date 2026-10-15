@@ -17,3 +17,8 @@
 日常更新：[增量更新说明](retrieval_backend/INCREMENTAL_UPDATE_GUIDE.md)。
 
 数据库、图片、模型、token 和真实 `.env` 均不提交到 GitHub。部署前请创建开发环境自己的密码和 JWT secret。
+
+
+## 双 MySQL 部署
+
+正式服务使用两个逻辑数据库：`USER_MYSQL_*` 连接已有用户库，`PAPER_MYSQL_*` 连接本机论文库。论文查询和导入走 `paperDb.js`，登录、用户和收藏继续走 `db.js`。不要把旧的混合 `mysql.sql` 直接导入论文库。详细步骤见 `deployment/DEVELOPMENT_MIGRATION.md`。

@@ -8,7 +8,7 @@ const dotenv = require('dotenv');
 const [envFile, target] = process.argv.slice(2);
 if (!envFile || !target) throw Error('Usage: node export-mysql.mjs /path/to/server.env /path/to/mysql.sql');
 const cfg={...dotenv.parse(fs.readFileSync(envFile)),...process.env};
-const conn=await mysql.createConnection({host:cfg.MYSQL_HOST,port:Number(cfg.MYSQL_PORT||3306),user:cfg.MYSQL_USER,password:cfg.MYSQL_PASSWORD,database:cfg.MYSQL_DATABASE||'paperddl',supportBigNumbers:true,bigNumberStrings:true,dateStrings:true,jsonStrings:true,connectTimeout:20000});
+const conn=await mysql.createConnection({host:cfg.USER_MYSQL_HOST||cfg.MYSQL_HOST,port:Number(cfg.USER_MYSQL_PORT||cfg.MYSQL_PORT||3306),user:cfg.USER_MYSQL_USER||cfg.MYSQL_USER,password:cfg.USER_MYSQL_PASSWORD??cfg.MYSQL_PASSWORD,database:cfg.USER_MYSQL_DATABASE||cfg.MYSQL_DATABASE||'paperddl',supportBigNumbers:true,bigNumberStrings:true,dateStrings:true,jsonStrings:true,connectTimeout:20000});
 const stream=fs.createWriteStream(target,{flags:'wx',mode:0o600});
 const write=async value=>{if(!stream.write(value))await once(stream,'drain');};
 const ident=value=>'`'+value.replaceAll('`','``')+'`';
@@ -44,6 +44,6 @@ try {
  await write('SET SQL_MODE=@OLD_SQL_MODE;\nSET FOREIGN_KEY_CHECKS=1;\n');
  await conn.commit();
  stream.end();await once(stream,'finish');
- fs.writeFileSync(target+'.manifest.json',JSON.stringify({created_at:new Date().toISOString(),database:cfg.MYSQL_DATABASE||'paperddl',counts,consistent_snapshot:true,triggers:0,routines:0,events:0},null,2),{mode:0o600});
+ fs.writeFileSync(target+'.manifest.json',JSON.stringify({created_at:new Date().toISOString(),database:cfg.USER_MYSQL_DATABASE||cfg.MYSQL_DATABASE||'paperddl',counts,consistent_snapshot:true,triggers:0,routines:0,events:0},null,2),{mode:0o600});
  console.log('export complete',counts);
 } catch(error){await conn.rollback();stream.destroy();throw error;} finally{await conn.end();}

@@ -1,4 +1,4 @@
-import { execute } from "./db.js";
+import { paperExecute as execute } from "./paperDb.js";
 
 const countCache = new Map();
 const COUNT_CACHE_TTL_MS = 30_000;
