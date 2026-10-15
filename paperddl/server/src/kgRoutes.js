@@ -1,4 +1,5 @@
 import neo4j from "neo4j-driver";
+import { performance } from "node:perf_hooks";
 import { fetchEnrichedKg } from "./kgEnrichedRead.js";
 import { runKgEnrich } from "./kgEnrich.js";
 
@@ -43,11 +44,20 @@ const MAX_CITATION_LINES = 400;
 const MAX_DETAIL_LINES = 320;
 const MAX_CONTEXT_LINES = 160;
 const emptyKgSearchCache = new Map();
+const graphCache = new Map();
+const GRAPH_CACHE_TTL_MS = 10_000;
+const MAX_GRAPH_CACHE_ENTRIES = 64;
 
 const driver = neo4j.driver(
   process.env.NEO4J_URI || "bolt://neo4j:7687",
   neo4j.auth.basic(process.env.NEO4J_USER || "neo4j", process.env.NEO4J_PASSWORD || "")
 );
+
+// Establish the Bolt connection during service startup.  Without this small
+// warm-up, the first user-facing KG request pays the driver handshake cost.
+void driver.verifyConnectivity()
+  .then(() => console.info("[neo4j] bolt connection ready"))
+  .catch((error) => console.warn("[neo4j] bolt warm-up unavailable", error?.message || error));
 
 function toNative(value) {
   if (neo4j.isInt(value)) return value.toNumber();
@@ -58,8 +68,28 @@ function toNative(value) {
   return value;
 }
 
+const NODE_PROJECTION_FIELDS = [
+  "paper_id", "author_id", "institution_id", "method_id", "funding_id",
+  "topic_id", "conference_id", "venue_id", "title", "name", "content",
+  "abstract", "year", "venue", "doi", "pdf_url", "url", "external",
+  "record_type"
+];
+
+function nodeProjection(alias) {
+  const fields = NODE_PROJECTION_FIELDS.map((field) => `.${field}`).join(", ");
+  return `${alias}{${fields}, __labels: labels(${alias})}`;
+}
+
+function nodeProperties(node) {
+  if (node && typeof node === "object" && node.properties) {
+    return toNative(node.properties || {});
+  }
+  return toNative(node || {});
+}
+
 function nodeType(node) {
-  return NODE_TYPES.find((label) => node.labels?.includes(label)) || "Paper";
+  const labels = node?.labels || nodeProperties(node).__labels || [];
+  return NODE_TYPES.find((label) => labels.includes(label)) || "Paper";
 }
 
 function graphNodeId(type, props) {
@@ -80,7 +110,7 @@ function compactDescription(type, props, text) {
 
 function formatNode(node, extra = {}) {
   const type = nodeType(node);
-  const props = toNative(node.properties || {});
+  const props = nodeProperties(node);
   const [color, borderColor] = COLORS[type] || COLORS.Paper;
   const id = graphNodeId(type, props);
   const text = graphNodeText(type, props);
@@ -102,13 +132,14 @@ function formatNode(node, extra = {}) {
       doi: props.doi || "",
       pdf_url: props.pdf_url || "",
       url: props.url || "",
-      external: props.external === true
+      external: props.external === true,
+      record_type: props.record_type || (props.external === true ? "external_full" : "canonical")
     }
   };
 }
 
 function paperSummary(node, authors = []) {
-  const props = toNative(node.properties || {});
+  const props = nodeProperties(node);
   return {
     paper_id: props.paper_id,
     title: props.title || props.paper_id,
@@ -117,15 +148,16 @@ function paperSummary(node, authors = []) {
     venue: props.venue || "",
     abstract: props.abstract || "",
     doi: props.doi || "",
-    pdf_url: props.pdf_url || ""
+    pdf_url: props.pdf_url || "",
+    record_type: props.record_type || (props.external === true ? "external_full" : "canonical")
   };
 }
 
 function formatLine(fromNode, toNode, type) {
   const fromType = nodeType(fromNode);
   const toType = nodeType(toNode);
-  const fromProps = toNative(fromNode.properties || {});
-  const toProps = toNative(toNode.properties || {});
+  const fromProps = nodeProperties(fromNode);
+  const toProps = nodeProperties(toNode);
   const from = graphNodeId(fromType, fromProps);
   const to = graphNodeId(toType, toProps);
 
@@ -142,6 +174,13 @@ function formatLine(fromNode, toNode, type) {
       weight: 1
     }
   };
+}
+
+function cacheGraph(key, value) {
+  graphCache.set(key, { createdAt: Date.now(), value });
+  while (graphCache.size > MAX_GRAPH_CACHE_ENTRIES) {
+    graphCache.delete(graphCache.keys().next().value);
+  }
 }
 
 export function registerKgRoutes(app) {
@@ -186,7 +225,7 @@ export function registerKgRoutes(app) {
       const legacySearch = () => session.executeRead((tx) =>
         tx.run(`
           MATCH (p:Paper)
-          WHERE p.external = false
+          WHERE coalesce(p.record_type, CASE WHEN p.external = false THEN "canonical" ELSE "external_full" END) = "canonical"
             AND ($q = "" OR toLower(coalesce(p.title, "")) CONTAINS toLower($q))
           WITH p
           ORDER BY p.year DESC, p.title
@@ -194,7 +233,7 @@ export function registerKgRoutes(app) {
           OPTIONAL MATCH (p)-[ar:AUTHORED_BY]->(a:Author)
           WITH p, ar, a ORDER BY coalesce(ar.position, ar.author_order, 2147483647), a.name
           WITH p, [name IN collect(a.name) WHERE name IS NOT NULL] AS authors
-          RETURN p, authors
+          RETURN ${nodeProjection("p")} AS p, authors
           ORDER BY p.year DESC, p.title
         `, { q, limit: neo4j.int(limit) })
       );
@@ -211,14 +250,14 @@ export function registerKgRoutes(app) {
             tx.run(`
               CALL db.index.fulltext.queryNodes("paper_title_fulltext", $q)
               YIELD node AS p, score
-              WHERE p.external = false
+              WHERE coalesce(p.record_type, CASE WHEN p.external = false THEN "canonical" ELSE "external_full" END) = "canonical"
               WITH p, score
               ORDER BY score DESC, coalesce(p.year, 0) DESC, p.title
               LIMIT $limit
               OPTIONAL MATCH (p)-[ar:AUTHORED_BY]->(a:Author)
               WITH p, ar, a ORDER BY coalesce(ar.position, ar.author_order, 2147483647), a.name
               WITH p, [name IN collect(a.name) WHERE name IS NOT NULL] AS authors
-              RETURN p, authors
+              RETURN ${nodeProjection("p")} AS p, authors
             `, { q, limit: neo4j.int(limit) })
           );
         } catch (error) {
@@ -254,7 +293,7 @@ export function registerKgRoutes(app) {
             WITH a, ar ORDER BY coalesce(ar.position, ar.author_order, 2147483647), a.name
             RETURN [name IN collect(a.name) WHERE name IS NOT NULL] AS authors
           }
-          RETURN p, authors
+          RETURN ${nodeProjection("p")} AS p, authors
           LIMIT 1
         `, { paperId })
       );
@@ -271,14 +310,23 @@ export function registerKgRoutes(app) {
   app.get("/api/kg/graph", async (req, res) => {
     const paperId = typeof req.query.paperId === "string" ? req.query.paperId.trim() : "";
     const depth = Math.min(Math.max(Number(req.query.depth) || 2, 1), 3);
+    const includeReferenceStubs = req.query.includeReferenceStubs === "true";
     if (!paperId) return res.status(400).json({ message: "paperId is required" });
 
+    const cacheKey = `${paperId}|${depth}|${includeReferenceStubs ? "all" : "searchable"}`;
+    const cachedGraph = graphCache.get(cacheKey);
+    if (cachedGraph && Date.now() - cachedGraph.createdAt < GRAPH_CACHE_TTL_MS) {
+      return res.json(cachedGraph.value);
+    }
+
     const session = driver.session();
+    const graphStarted = performance.now();
+    const graphTimings = {};
     try {
       const papers = await session.executeRead(async (tx) => {
         const rootResult = await tx.run(`
           MATCH (root:Paper {paper_id: $paperId})
-          RETURN root
+          RETURN ${nodeProjection("root")} AS root
           LIMIT 1
         `, { paperId });
         if (!rootResult.records.length) return null;
@@ -294,18 +342,22 @@ export function registerKgRoutes(app) {
             MATCH (frontier:Paper)-[:CITES]-(neighbor:Paper)
             WHERE frontier.paper_id IN $frontierIds
               AND NOT (neighbor.paper_id IN $seenIds)
-            RETURN neighbor
+              AND ($includeReferenceStubs OR coalesce(neighbor.record_type,
+                    CASE WHEN coalesce(neighbor.external, false) THEN "external_full" ELSE "canonical" END)
+                    <> "reference_stub")
+            RETURN ${nodeProjection("neighbor")} AS neighbor
             LIMIT $candidateLimit
           `, {
             frontierIds,
             seenIds: [...seenIds],
+            includeReferenceStubs,
             candidateLimit: neo4j.int(candidateLimit)
           });
 
           const nextFrontier = [];
           for (const record of neighborResult.records) {
             const neighbor = record.get("neighbor");
-            const neighborId = toNative(neighbor.properties || {}).paper_id;
+            const neighborId = nodeProperties(neighbor).paper_id;
             if (!neighborId || seenIds.has(neighborId)) continue;
             seenIds.add(neighborId);
             selected.push(neighbor);
@@ -317,10 +369,11 @@ export function registerKgRoutes(app) {
 
         return selected;
       });
+      graphTimings.discovery_ms = performance.now() - graphStarted;
 
       if (!papers) return res.status(404).json({ message: "Paper not found" });
 
-      const paperIds = papers.map((paper) => toNative(paper.properties).paper_id).filter(Boolean);
+      const paperIds = papers.map((paper) => nodeProperties(paper).paper_id).filter(Boolean);
       const nodes = new Map();
       const lines = new Map();
       const authorMap = new Map();
@@ -336,28 +389,38 @@ export function registerKgRoutes(app) {
         tx.run(`
           MATCH (a:Paper)-[r:CITES]->(b:Paper)
           WHERE a.paper_id IN $paperIds AND b.paper_id IN $paperIds
-          RETURN a, b
+            AND ($includeReferenceStubs OR (
+              coalesce(a.record_type, CASE WHEN coalesce(a.external, false) THEN "external_full" ELSE "canonical" END) <> "reference_stub"
+              AND coalesce(b.record_type, CASE WHEN coalesce(b.external, false) THEN "external_full" ELSE "canonical" END) <> "reference_stub"
+            ))
+          RETURN ${nodeProjection("a")} AS a, ${nodeProjection("b")} AS b
           LIMIT $maxLines
-        `, { paperIds, maxLines: neo4j.int(MAX_CITATION_LINES) })
+        `, { paperIds, includeReferenceStubs, maxLines: neo4j.int(MAX_CITATION_LINES) })
       );
 
       for (const record of citeResult.records) {
         const line = formatLine(record.get("a"), record.get("b"), "CITES");
         lines.set(`${line.from}|${line.to}|${line.text}`, line);
       }
+      graphTimings.citations_ms = performance.now() - graphStarted - graphTimings.discovery_ms;
 
       const detailResult = await session.executeRead((tx) =>
         tx.run(`
           MATCH (p:Paper)-[r]->(n)
           WHERE p.paper_id IN $paperIds AND type(r) IN $detailRels
+            AND ($includeReferenceStubs OR coalesce(p.record_type,
+              CASE WHEN coalesce(p.external, false) THEN "external_full" ELSE "canonical" END)
+              <> "reference_stub")
           WITH p, r, n, CASE WHEN p.paper_id = $rootPaperId THEN 0 ELSE 1 END AS rootPriority
           ORDER BY rootPriority
-          RETURN p, type(r) AS relType, r, n
+          RETURN ${nodeProjection("p")} AS p, type(r) AS relType, r,
+                 ${nodeProjection("n")} AS n
           LIMIT $maxLines
         `, {
           paperIds,
           rootPaperId: paperId,
           detailRels: PAPER_DETAIL_RELS,
+            includeReferenceStubs,
           maxLines: neo4j.int(MAX_DETAIL_LINES)
         })
       );
@@ -386,20 +449,26 @@ export function registerKgRoutes(app) {
           conferenceIds.add(targetNode.id);
         }
       }
+      graphTimings.details_ms = performance.now() - graphStarted - graphTimings.discovery_ms - graphTimings.citations_ms;
 
       if (authorIds.size || conferenceIds.size) {
         const contextResult = await session.executeRead((tx) =>
           tx.run(`
-            MATCH (source)-[r]->(target)
-            WHERE type(r) IN $contextRels
-              AND ((type(r) = "AFFILIATED_WITH" AND source:Author AND source.author_id IN $authorIds)
-                OR (type(r) = "PART_OF" AND source:Conference AND source.conference_id IN $conferenceIds))
-            RETURN source, type(r) AS relType, target
+            CALL {
+              MATCH (source:Author)-[:AFFILIATED_WITH]-(target)
+              WHERE source.author_id IN $authorIds
+              RETURN source, "AFFILIATED_WITH" AS relType, target
+              UNION ALL
+              MATCH (source:Conference)-[:PART_OF]-(target)
+              WHERE source.conference_id IN $conferenceIds
+              RETURN source, "PART_OF" AS relType, target
+            }
+            RETURN ${nodeProjection("source")} AS source, relType,
+                   ${nodeProjection("target")} AS target
             LIMIT $maxLines
           `, {
             authorIds: [...authorIds],
             conferenceIds: [...conferenceIds],
-            contextRels: CONTEXT_DETAIL_RELS,
             maxLines: neo4j.int(MAX_CONTEXT_LINES)
           })
         );
@@ -416,6 +485,7 @@ export function registerKgRoutes(app) {
           lines.set(`${line.from}|${line.to}|${line.text}`, line);
         }
       }
+      graphTimings.context_ms = performance.now() - graphStarted - graphTimings.discovery_ms - graphTimings.citations_ms - graphTimings.details_ms;
 
       for (const [id, authorEntries] of authorMap.entries()) {
         const node = nodes.get(id);
@@ -426,11 +496,17 @@ export function registerKgRoutes(app) {
         }
       }
 
-      res.json({
+      const payload = {
         rootId: paperId,
         nodes: [...nodes.values()],
         lines: [...lines.values()]
-      });
+      };
+      cacheGraph(cacheKey, payload);
+      graphTimings.total_ms = performance.now() - graphStarted;
+      if (graphTimings.total_ms >= 500) {
+        console.info(`[kg-timing] paper=${paperId} depth=${depth} stubs=${includeReferenceStubs} nodes=${payload.nodes.length} lines=${payload.lines.length} timings=${JSON.stringify(graphTimings)}`);
+      }
+      res.json(payload);
     } catch (error) {
       res.status(500).json({ message: "Failed to load KG graph", error: error instanceof Error ? error.message : String(error) });
     } finally {

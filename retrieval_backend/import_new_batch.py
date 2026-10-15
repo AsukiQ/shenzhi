@@ -293,10 +293,10 @@ class GraphStore:
         statements = []
         for (label, is_main), rows in sorted(groups.items()):
             if is_main:
-                update = 'SET n += row.props, n.external=false, n.incremental_revision=$revision, n.incremental_batch=$batch'
+                update = "SET n += row.props, n.external=false, n.record_type='canonical', n.incremental_revision=$revision, n.incremental_batch=$batch"
             elif label == 'Paper':
                 # Reference stubs must never downgrade or overwrite a complete paper.
-                update = 'ON CREATE SET n += row.props, n.external=true'
+                update = "ON CREATE SET n += row.props, n.external=true, n.record_type='reference_stub'"
             else:
                 update = 'SET n += row.props'
             statements.append((f'UNWIND $rows AS row MERGE (n:{label} {{{KEYS[label]}:row.id}}) {update}',
@@ -316,9 +316,9 @@ class GraphStore:
                 MATCH (s:{sl} {{{KEYS[sl]}:row.s}}), (t:{tl} {{{KEYS[tl]}:row.t}})
                 MERGE (s)-[r:{typ}]->(t) SET r += row.props''', {'rows': rows}))
         statements.append(('''MATCH (p:Paper {paper_id:$pid}) RETURN p.external AS external,
-            p.incremental_revision AS revision''', {'pid': plan['pid']}))
+            p.record_type AS record_type, p.incremental_revision AS revision''', {'pid': plan['pid']}))
         result = self.transaction(statements)[-1]
-        if result != [{'external': False, 'revision': plan['revision']}]:
+        if result != [{'external': False, 'record_type': 'canonical', 'revision': plan['revision']}]:
             raise RuntimeError('Graph verification failed')
 
 
@@ -471,8 +471,8 @@ class SqlStore:
             fields = ['paper_id', 'source_id', 'title', 'abstract', 'conference', 'year',
                       'authors_json', 'keywords_json', 'subjects_json', 'funding_json', 'image_id']
             values = [doc.get(k) if not k.endswith('_json') else encoded(doc[k[:-5]]) for k in fields]
-            self.conn.execute(f'''INSERT INTO papers ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})
-                ON CONFLICT(paper_id) DO UPDATE SET {','.join(k+'=excluded.'+k for k in fields if k!='paper_id')}''', values)
+            self.conn.execute(f'''INSERT INTO papers ({','.join(fields)},record_type,external) VALUES ({','.join('?' for _ in fields)},'canonical',0)
+                ON CONFLICT(paper_id) DO UPDATE SET {','.join(k+'=excluded.'+k for k in fields if k!='paper_id')},record_type='canonical',external=0''', values)
             self.conn.execute('DELETE FROM papers_fts WHERE rowid IN (SELECT fts_rowid FROM import_fts_rows WHERE paper_id=?)', (pid,))
             self.conn.execute('DELETE FROM import_fts_rows WHERE paper_id=?', (pid,))
             text = (pid, _fts_text(doc['title']), _fts_text(doc['abstract']),

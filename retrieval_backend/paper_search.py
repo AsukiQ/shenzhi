@@ -20,8 +20,10 @@ from typing import Any, Iterable, Mapping
 
 try:
     from .funding_cleanup import clean_funding_name
+    from .paper_records import BUSINESS_FIELDS, SEARCH_SCOPES, ensure_business_schema, business_values
 except ImportError:
     from funding_cleanup import clean_funding_name
+    from paper_records import BUSINESS_FIELDS, SEARCH_SCOPES, ensure_business_schema, business_values
 
 
 SCHEMA = """
@@ -37,7 +39,9 @@ CREATE TABLE IF NOT EXISTS papers (
     keywords_json TEXT NOT NULL,
     subjects_json TEXT NOT NULL,
     funding_json TEXT NOT NULL DEFAULT '[]',
-    image_id TEXT
+    image_id TEXT,
+    record_type TEXT NOT NULL DEFAULT 'canonical',
+    external INTEGER NOT NULL DEFAULT 0
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
     paper_id UNINDEXED,
@@ -154,6 +158,11 @@ class SearchFilters:
     subject: list[str] = field(default_factory=list)
     institution: list[str] = field(default_factory=list)
     funding: list[str] = field(default_factory=list)
+    record_type: str = "canonical"
+
+    def __post_init__(self):
+        if self.record_type not in SEARCH_SCOPES:
+            raise ValueError("record_type must be canonical, external_full or all")
 
 
 @dataclass
@@ -186,6 +195,7 @@ class SearchResult:
     retrieval_mode: str = "bm25"
     image_id: str | None = None
     funding: list[str] = field(default_factory=list)
+    record_type: str = "canonical"
 
 
 @dataclass(frozen=True)
@@ -247,6 +257,7 @@ class PaperSearchIndex:
         if writable:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            ensure_business_schema(conn)
             columns = {r[1] for r in conn.execute('PRAGMA table_info(papers)')}
             for name, definition in [('funding_json', "TEXT NOT NULL DEFAULT '[]'"), ('image_id', 'TEXT')]:
                 if name not in columns:
@@ -270,11 +281,14 @@ class PaperSearchIndex:
 
     def healthcheck(self) -> dict[str, Any]:
         conn = self.read_connection()
-        paper_count = int(conn.execute("SELECT count(*) FROM papers").fetchone()[0])
+        counts = {row[0]: int(row[1]) for row in conn.execute("SELECT record_type,count(*) FROM papers GROUP BY record_type")}
+        paper_count = counts.get("canonical", 0)
         return {
             "status": "ok",
             "backend": "sqlite_fts5",
             "paper_count": paper_count,
+            "stored_record_count": sum(counts.values()),
+            "record_counts": counts,
             "db_path": str(Path(self.db_path).resolve()),
         }
 
@@ -323,6 +337,12 @@ class PaperSearchIndex:
                          doc.get("abstract", ""), doc.get("conference"), year,
                          json.dumps(authors, ensure_ascii=False), json.dumps(keywords, ensure_ascii=False),
                          json.dumps(subjects, ensure_ascii=False), json.dumps(funding, ensure_ascii=False), doc.get('image_id')),
+                    )
+                    record_type = doc.get('record_type') or ('reference_stub' if doc.get('external') is True else 'canonical')
+                    values = business_values(doc)
+                    conn.execute(
+                        'UPDATE papers SET record_type=?,external=?,' + ','.join(k+'=?' for k in BUSINESS_FIELDS) + ' WHERE paper_id=?',
+                        [record_type, int(record_type != 'canonical'), *[values[k] for k in BUSINESS_FIELDS], paper_id],
                     )
                     # Full builds start with an empty index. For online incremental
                     # updates use import_new_batch.py, which replaces FTS by rowid.
@@ -400,6 +420,12 @@ class PaperSearchIndex:
 
     @classmethod
     def _passes_filters(cls, row: sqlite3.Row, filters: SearchFilters) -> bool:
+        record_type = row["record_type"]
+        if filters.record_type == "all":
+            if record_type not in {"canonical", "external_full"}:
+                return False
+        elif record_type != filters.record_type:
+            return False
         authors = json.loads(row["authors_json"])
         keywords = json.loads(row["keywords_json"])
         subjects = json.loads(row["subjects_json"])
@@ -424,7 +450,14 @@ class PaperSearchIndex:
             return False
         return True
 
-    def recall(self, query: str, *, limit: int = 1000) -> list[CandidateHit]:
+    @staticmethod
+    def _scope_sql(record_type="canonical", alias=""):
+        if record_type not in SEARCH_SCOPES:
+            raise ValueError("record_type must be canonical, external_full or all")
+        column = (alias + "." if alias else "") + "record_type"
+        return column + (" IN ('canonical','external_full')" if record_type == "all" else " = '" + record_type + "'")
+
+    def recall(self, query: str, *, limit: int = 1000, record_type: str = "canonical") -> list[CandidateHit]:
         """Return BM25 candidates without applying metadata/graph filters."""
 
         limit = max(1, min(int(limit), 5000))
@@ -437,7 +470,8 @@ class PaperSearchIndex:
             )
             rows = conn.execute(
                 "SELECT paper_id, bm25(papers_fts, 5.0, 1.0, 3.0, 2.0) AS bm "
-                "FROM papers_fts WHERE papers_fts MATCH ? ORDER BY bm LIMIT ?",
+                "FROM papers_fts WHERE papers_fts MATCH ? AND paper_id IN "
+                "(SELECT paper_id FROM papers WHERE " + self._scope_sql(record_type) + ") ORDER BY bm LIMIT ?",
                 (match, limit),
             ).fetchall()
             return [
@@ -453,7 +487,7 @@ class PaperSearchIndex:
         # behavior when a Chinese rewrite is unavailable.
         return []
 
-    def recall_prefix(self, query: str, *, limit: int = 300) -> list[CandidateHit]:
+    def recall_prefix(self, query: str, *, limit: int = 300, record_type: str = "canonical") -> list[CandidateHit]:
         """Bounded typo/partial-word recall using FTS5 prefix terms.
 
         This secondary channel tolerates a missing suffix or a small audited
@@ -489,7 +523,8 @@ class PaperSearchIndex:
         match = " AND ".join(groups)
         rows = conn.execute(
             "SELECT paper_id, bm25(papers_fts, 5.0, 1.0, 3.0, 2.0) AS bm "
-            "FROM papers_fts WHERE papers_fts MATCH ? ORDER BY bm LIMIT ?",
+            "FROM papers_fts WHERE papers_fts MATCH ? AND paper_id IN "
+            "(SELECT paper_id FROM papers WHERE " + self._scope_sql(record_type) + ") ORDER BY bm LIMIT ?",
             (match, limit),
         ).fetchall()
         return [
@@ -516,7 +551,7 @@ class PaperSearchIndex:
         limit = max(1, min(int(limit), 5000))
         conn = self.read_connection()
         rows = conn.execute(
-            "SELECT * FROM papers ORDER BY year IS NULL, year DESC, row_id DESC"
+            "SELECT * FROM papers WHERE " + self._scope_sql(filters.record_type) + " ORDER BY year IS NULL, year DESC, row_id DESC"
         ).fetchall()
         hits: list[CandidateHit] = []
         for row in rows:
@@ -574,6 +609,7 @@ class PaperSearchIndex:
             results.append(
                 SearchResult(
                     paper_id=paper_id,
+                    record_type=row["record_type"],
                     image_id=(row['image_id'] if 'image_id' in row.keys() and row['image_id'] else self.image_id_for(paper_id)),
                     title=str(row["title"]),
                     abstract=str(row["abstract"]),
@@ -616,7 +652,7 @@ class PaperSearchIndex:
         conn = self.read_connection()
         key = subject.casefold()
         total = int(conn.execute(
-            f"SELECT COUNT(DISTINCT paper_id) FROM {table} WHERE value_key = ?", (key,)
+            f"SELECT COUNT(DISTINCT m.paper_id) FROM {table} m JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.value_key = ?", (key,)
         ).fetchone()[0])
         match_sql = "value_key = ?"
         match_value = key
@@ -628,11 +664,11 @@ class PaperSearchIndex:
             match_sql = "value_key LIKE ? ESCAPE '\\'"
             match_value = f"%{escaped}%"
             total = int(conn.execute(
-                f"SELECT COUNT(DISTINCT paper_id) FROM {table} WHERE {match_sql}", (match_value,)
+                f"SELECT COUNT(DISTINCT m.paper_id) FROM {table} m JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.{match_sql}", (match_value,)
             ).fetchone()[0])
         rows = conn.execute(
-            f"SELECT paper_id FROM {table} WHERE {match_sql} "
-            "GROUP BY paper_id ORDER BY paper_id LIMIT ? OFFSET ?", (match_value, limit, offset)
+            f"SELECT m.paper_id FROM {table} m JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.{match_sql} "
+            "GROUP BY m.paper_id ORDER BY m.paper_id LIMIT ? OFFSET ?", (match_value, limit, offset)
         ).fetchall()
         ids = [str(row[0]) for row in rows]
         return self.fetch_results(ids, filters=SearchFilters()), total
@@ -709,7 +745,7 @@ class PaperSearchIndex:
             f"SELECT m.paper_id, COUNT(DISTINCT m.value_key) AS shared, "
             "COALESCE(p.year, -1) AS paper_year "
             f"FROM {table} AS m JOIN papers AS p ON p.paper_id=m.paper_id "
-            f"WHERE m.value_key IN ({value_marks}) "
+            f"WHERE p.record_type='canonical' AND m.value_key IN ({value_marks}) "
             f"AND m.paper_id NOT IN ({seed_marks}) "
             "GROUP BY m.paper_id "
             "ORDER BY shared DESC, paper_year DESC, m.paper_id "

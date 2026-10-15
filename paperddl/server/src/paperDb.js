@@ -1,22 +1,56 @@
 import "./env.js";
-import mysql from "mysql2/promise";
+import path from "node:path";
+import Database from "better-sqlite3";
 
-const port = Number(process.env.PAPER_MYSQL_PORT || 3306);
-const connectionLimit = Number(process.env.PAPER_MYSQL_CONNECTION_LIMIT || 16);
+// Paper metadata and the FTS5 index are a local, read-mostly SQLite database.
+// The path is explicit in production so the Node API and retrieval service use
+// the same canonical index.
+const defaultPath = "/home/user2/jiansuo/retrieval_backend/papers_fts.db";
+export const paperSqlitePath = path.resolve(
+  process.env.PAPER_SQLITE_PATH || defaultPath
+);
 
-// Paper database: paper metadata and full-text search only.
-export const paperPool = mysql.createPool({
-  host: process.env.PAPER_MYSQL_HOST || process.env.MYSQL_HOST || "localhost",
-  port,
-  user: process.env.PAPER_MYSQL_USER || process.env.MYSQL_USER || "root",
-  password: process.env.PAPER_MYSQL_PASSWORD ?? process.env.MYSQL_PASSWORD ?? "",
-  database: process.env.PAPER_MYSQL_DATABASE || "paperddl_papers",
-  waitForConnections: true,
-  connectionLimit,
-  queueLimit: 0
+export const paperDb = new Database(paperSqlitePath, {
+  readonly: true,
+  fileMustExist: true,
+  timeout: 5000
 });
+paperDb.pragma("query_only = ON");
 
-export async function paperExecute(sql, params = []) {
-  const [rows] = await paperPool.execute(sql, params);
-  return rows;
+const HEALTH_CACHE_TTL_MS = 15_000;
+let healthCache = null;
+
+export function paperPrepare(sql) {
+  return paperDb.prepare(sql);
+}
+
+export function paperHealthcheck() {
+  const now = Date.now();
+  if (healthCache && now - healthCache.createdAt < HEALTH_CACHE_TTL_MS) {
+    return { ...healthCache.value };
+  }
+
+  const counts = paperDb.prepare(
+    "SELECT record_type, COUNT(*) AS total FROM papers GROUP BY record_type"
+  ).all();
+  const recordCounts = Object.fromEntries(
+    counts.map((row) => [row.record_type || "canonical", Number(row.total)])
+  );
+  const paperCount = Object.values(recordCounts).reduce((sum, value) => sum + value, 0);
+  const canonicalCount = recordCounts.canonical || 0;
+  const value = {
+    status: "ok",
+    backend: "sqlite_fts5",
+    paperCount,
+    distinctPaperCount: paperCount,
+    canonicalCount,
+    recordCounts,
+    path: paperSqlitePath
+  };
+  healthCache = { createdAt: now, value };
+  return { ...value, recordCounts: { ...recordCounts } };
+}
+
+export function closePaperDb() {
+  if (paperDb.open) paperDb.close();
 }

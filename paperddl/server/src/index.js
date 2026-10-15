@@ -37,6 +37,7 @@ import {
   listPaperTracks,
   listPaperVenues
 } from "./paperRepository.js";
+import { paperHealthcheck } from "./paperDb.js";
 import { registerKgRoutes } from "./kgRoutes.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -82,7 +83,11 @@ app.use((req, res, next) => {
 registerKgRoutes(app);
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
+  try {
+    res.json({ ok: true, time: new Date().toISOString(), papers: paperHealthcheck() });
+  } catch (error) {
+    res.status(503).json({ ok: false, time: new Date().toISOString(), papers: { status: "error", error: error.message } });
+  }
 });
 
 app.post("/api/auth/login", loginLimiter, async (req, res) => {
@@ -214,7 +219,8 @@ app.delete("/api/favorites/:conferenceId", authenticate, async (req, res) => {
 
 app.get("/api/papers/venues", async (_req, res) => {
   try {
-    const venues = await listPaperVenues();
+    const recordType = typeof _req.query.record_type === "string" ? _req.query.record_type : "canonical";
+    const venues = await listPaperVenues(recordType);
     res.json(venues);
   } catch (error) {
     res.status(500).json({
@@ -234,7 +240,8 @@ app.get("/api/papers/tracks", async (req, res) => {
       return res.status(400).json({ message: "conference is required" });
     }
 
-    const tracks = await listPaperTracks(conference);
+    const recordType = typeof req.query.record_type === "string" ? req.query.record_type : "canonical";
+    const tracks = await listPaperTracks(conference, recordType);
     res.json(tracks);
   } catch (error) {
     res.status(500).json({
@@ -251,6 +258,7 @@ app.get("/api/papers", async (req, res) => {
       conference: typeof req.query.conference === "string" ? req.query.conference.trim() : "",
       year: typeof req.query.year === "string" ? req.query.year.trim() : "",
       track: typeof req.query.track === "string" ? req.query.track.trim() : "",
+      recordType: typeof req.query.record_type === "string" ? req.query.record_type.trim() : "canonical",
       limit: typeof req.query.limit === "string" ? req.query.limit : "",
       offset: typeof req.query.offset === "string" ? req.query.offset : ""
     });

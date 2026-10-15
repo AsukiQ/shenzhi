@@ -25,8 +25,16 @@ RELATION_TYPES: dict[str, tuple[str, ...]] = {
 FILTER_CYPHER = """
 UNWIND range(0, size($candidate_ids) - 1) AS candidate_index
 WITH candidate_index, $candidate_ids[candidate_index] AS requested_id
-OPTIONAL MATCH (p:Paper {paper_id: requested_id})
-WHERE p IS NULL OR (
+MATCH (p:Paper {paper_id: requested_id})
+WHERE (
+  ($record_type = 'all' AND coalesce(p.record_type,
+      CASE WHEN coalesce(p.external, false) THEN 'external_full' ELSE 'canonical' END)
+      IN ['canonical', 'external_full'])
+  OR ($record_type <> 'all' AND coalesce(p.record_type,
+      CASE WHEN coalesce(p.external, false) THEN 'external_full' ELSE 'canonical' END)
+      = $record_type)
+)
+AND (
   ($year_gte IS NULL OR p.year >= $year_gte)
   AND ($year_lte IS NULL OR p.year <= $year_lte)
   AND (size($conference) = 0 OR EXISTS {
@@ -71,6 +79,9 @@ EXPANSION_CYPHER = """
 UNWIND range(0, size($seed_ids) - 1) AS seed_index
 WITH $seed_ids[seed_index] AS seed_id, seed_index
 MATCH (seed:Paper {paper_id: seed_id})
+WHERE coalesce(seed.record_type,
+      CASE WHEN coalesce(seed.external, false) THEN 'external_full' ELSE 'canonical' END)
+      IN ['canonical', 'external_full']
 MATCH (seed)-[r]->(node)
 WHERE type(r) IN $relation_types
 WITH node, min(seed_index) AS first_seed
@@ -79,6 +90,9 @@ WITH collect(DISTINCT node)[0..$value_limit] AS nodes
 UNWIND nodes AS node
 OPTIONAL MATCH (other:Paper)-[back]->(node)
 WHERE type(back) IN $relation_types
+  AND coalesce(other.record_type,
+      CASE WHEN coalesce(other.external, false) THEN 'external_full' ELSE 'canonical' END)
+      IN ['canonical', 'external_full']
 WITH node, collect(DISTINCT other.paper_id)[0..$paper_limit] AS paper_ids
 RETURN coalesce(node.name, toString(node.year), node.paper_id) AS value,
        paper_ids
@@ -113,6 +127,7 @@ class Neo4jPaperFilter:
             )
         self.driver = driver
         self.database = database
+        self._health_cache: tuple[float, dict[str, Any]] | None = None
 
     def close(self) -> None:
         close = getattr(self.driver, "close", None)
@@ -120,18 +135,23 @@ class Neo4jPaperFilter:
             close()
 
     def healthcheck(self) -> dict[str, Any]:
+        cached = self._health_cache
+        if cached and time.monotonic() - cached[0] < 15.0:
+            return dict(cached[1])
         with self.driver.session(database=self.database) as session:
             row = session.run(
                 """CALL { MATCH (p:Paper) RETURN count(p) AS paper_count }
                    CALL { MATCH (f:Funding) RETURN count(f) AS funding_count }
                    RETURN paper_count, funding_count"""
             ).single()
-        return {
+        result = {
             "status": "ok",
             "paper_count": int(row["paper_count"]),
             "funding_count": int(row.get("funding_count", 0)),
             "database": self.database,
         }
+        self._health_cache = (time.monotonic(), result)
+        return dict(result)
 
     def filter_candidate_ids(
         self,
@@ -151,6 +171,7 @@ class Neo4jPaperFilter:
             "subject": list(filters.subject),
             "institution": list(filters.institution),
             "funding": list(filters.funding),
+            "record_type": filters.record_type,
         }
         with self.driver.session(database=self.database) as session:
             rows = session.run(FILTER_CYPHER, **params)
@@ -199,6 +220,17 @@ class Neo4jPaperFilter:
             RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name,
                    count { (a)<-[:AUTHORED_BY]-() } AS paper_count
             ORDER BY paper_count DESC, name, scholar_id
+            SKIP $offset LIMIT $limit
+            """
+        elif query:
+            statement = """
+            CALL db.index.fulltext.queryNodes("author_name_fulltext", $query)
+            YIELD node AS a, score
+            OPTIONAL MATCH (p:Paper)-[:AUTHORED_BY]->(a)
+            WITH a, score, count(DISTINCT p) AS paper_count
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name,
+                   paper_count, score
+            ORDER BY score DESC, paper_count DESC, name, scholar_id
             SKIP $offset LIMIT $limit
             """
         else:
@@ -317,6 +349,11 @@ class Neo4jHttpPaperFilter:
     def close(self) -> None:
         return None
 
+    @staticmethod
+    def _is_missing_fulltext_index(exc: Exception) -> bool:
+        message = str(exc).casefold()
+        return "indexnotfound" in message or ("fulltext" in message and "not found" in message)
+
     def funding_search(self, query: str = "", *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         """Search funding entities, counting distinct linked papers."""
         limit, offset = int(limit), int(offset)
@@ -326,8 +363,8 @@ class Neo4jHttpPaperFilter:
         cached = self._entity_cache.get(key)
         if cached and time.monotonic() - cached[0] < 30.0:
             return [dict(row) for row in cached[1]]
-        rows = self._run(
-            """
+        parameters = {"query": str(query or '').strip(), "limit": limit, "offset": offset}
+        fallback = """
             MATCH (f:Funding)
             WHERE $query = '' OR toLower(coalesce(f.name, '')) CONTAINS toLower($query)
                OR toLower(coalesce(f.funding_id, '')) CONTAINS toLower($query)
@@ -336,9 +373,24 @@ class Neo4jHttpPaperFilter:
                    count(DISTINCT p) AS paper_count
             ORDER BY paper_count DESC, name, funding_id
             SKIP $offset LIMIT $limit
-            """,
-            {"query": str(query or '').strip(), "limit": limit, "offset": offset},
-        )
+        """
+        statement = fallback
+        if parameters["query"]:
+            statement = """
+                CALL db.index.fulltext.queryNodes("funding_name_fulltext", $query)
+                YIELD node AS f, score
+                OPTIONAL MATCH (p:Paper)-[:FUNDED_BY]->(f)
+                RETURN f.funding_id AS funding_id, coalesce(f.name, f.funding_id) AS name,
+                       count(DISTINCT p) AS paper_count, max(score) AS score
+                ORDER BY score DESC, paper_count DESC, name, funding_id
+                SKIP $offset LIMIT $limit
+            """
+        try:
+            rows = self._run(statement, parameters)
+        except RuntimeError as exc:
+            if statement == fallback or not self._is_missing_fulltext_index(exc):
+                raise
+            rows = self._run(fallback, parameters)
         self._entity_cache[key] = (time.monotonic(), [dict(row) for row in rows])
         while len(self._entity_cache) > 256:
             self._entity_cache.pop(next(iter(self._entity_cache)))
@@ -352,8 +404,8 @@ class Neo4jHttpPaperFilter:
         cached = self._entity_cache.get(key)
         if cached and time.monotonic() - cached[0] < 30.0:
             return [dict(row) for row in cached[1]]
-        rows = self._run(
-            """
+        parameters = {"query": query, "offset": bounded_offset, "limit": bounded_limit}
+        fallback = """
             MATCH (i:Institution)
             WHERE $query = '' OR toLower(coalesce(i.name, '')) CONTAINS toLower($query)
                OR toLower(coalesce(i.institution_id, '')) CONTAINS toLower($query)
@@ -363,9 +415,25 @@ class Neo4jHttpPaperFilter:
                    count(DISTINCT p) AS paper_count
             ORDER BY paper_count DESC, name, institution_id
             SKIP $offset LIMIT $limit
-            """,
-            {"query": query, "offset": bounded_offset, "limit": bounded_limit},
-        )
+        """
+        statement = fallback
+        if query:
+            statement = """
+                CALL db.index.fulltext.queryNodes("institution_name_fulltext", $query)
+                YIELD node AS i, score
+                OPTIONAL MATCH (p:Paper)-[:AUTHORED_BY]->(:Author)-[:AFFILIATED_WITH]-(i)
+                RETURN coalesce(i.institution_id, i.id) AS institution_id,
+                       coalesce(i.name, i.institution_id, i.id) AS name,
+                       count(DISTINCT p) AS paper_count, max(score) AS score
+                ORDER BY score DESC, paper_count DESC, name, institution_id
+                SKIP $offset LIMIT $limit
+            """
+        try:
+            rows = self._run(statement, parameters)
+        except RuntimeError as exc:
+            if statement == fallback or not self._is_missing_fulltext_index(exc):
+                raise
+            rows = self._run(fallback, parameters)
         self._entity_cache[key] = (time.monotonic(), [dict(row) for row in rows])
         while len(self._entity_cache) > 256:
             self._entity_cache.pop(next(iter(self._entity_cache)))
@@ -405,6 +473,17 @@ class Neo4jHttpPaperFilter:
                    count { (a)<-[:AUTHORED_BY]-() } AS paper_count
             ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
             """
+        elif query and not subject and not funding:
+            statement = """
+            CALL db.index.fulltext.queryNodes("author_name_fulltext", $query)
+            YIELD node AS a, score
+            OPTIONAL MATCH (p:Paper)-[:AUTHORED_BY]->(a)
+            WITH a, score, count(DISTINCT p) AS paper_count
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name,
+                   paper_count, score
+            ORDER BY score DESC, paper_count DESC, name, scholar_id
+            SKIP $offset LIMIT $limit
+            """
         else:
             statement = """
             MATCH (a:Author)
@@ -423,10 +502,31 @@ class Neo4jHttpPaperFilter:
             RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name, size(papers) AS paper_count
             ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
             """
-        rows = self._run(
-            statement,
-            {"query": query, "subject": subject, "funding": funding, "offset": max(0, int(offset)), "limit": max(1, min(100, int(limit)))},
-        )
+        parameters = {
+            "query": query,
+            "subject": subject,
+            "funding": funding,
+            "offset": max(0, int(offset)),
+            "limit": max(1, min(100, int(limit))),
+        }
+        try:
+            rows = self._run(statement, parameters)
+        except RuntimeError as exc:
+            if not (query and not subject and not funding) or not self._is_missing_fulltext_index(exc):
+                raise
+            rows = self._run(
+                """
+                MATCH (a:Author)
+                WHERE toLower(coalesce(a.name, '')) CONTAINS toLower($query)
+                   OR toLower(coalesce(a.author_id, '')) CONTAINS toLower($query)
+                OPTIONAL MATCH (p:Paper)-[:AUTHORED_BY]->(a)
+                WITH a, count(DISTINCT p) AS paper_count
+                RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name,
+                       paper_count
+                ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
+                """,
+                parameters,
+            )
         self._scholar_cache[cache_key] = (time.monotonic(), [dict(row) for row in rows])
         while len(self._scholar_cache) > 256:
             self._scholar_cache.pop(next(iter(self._scholar_cache)))
@@ -503,6 +603,7 @@ class Neo4jHttpPaperFilter:
                 "subject": list(filters.subject),
                 "institution": list(filters.institution),
                 "funding": list(filters.funding),
+            "record_type": filters.record_type,
             },
         )
         return [str(row["paper_id"]) for row in rows]

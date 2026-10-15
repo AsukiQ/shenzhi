@@ -48,26 +48,27 @@ docker compose -f deployment/compose.yml up -d neo4j paper-mysql
 
 如果卷里已存在数据，load 会拒绝覆盖；请先确认目标卷是否确实为开发环境，勿直接覆写生产库。
 
-## 4. 配置两个 MySQL
+## 4. 配置用户 MySQL 和论文 SQLite
 
-服务现在明确分为两个数据库：
+服务现在明确分为两类存储：
 
 - `USER_MYSQL_*`：已有用户数据库，保存 `users`、`favorites`；可以继续使用原服务器，不需要把它搬到开发机。
-- `PAPER_MYSQL_*`：开发机上的 `paper-mysql`，只保存论文和全文索引。Compose 首次创建卷时会自动执行 `deployment/paper-mysql-init/001_papers.sql`。
+- `PAPER_SQLITE_PATH`：论文元数据和 SQLite FTS5 全文索引。Node 论文列表接口和 Python 检索接口读取同一个 `papers_fts.db`。
 
-把 `deployment/.env.example` 复制为 `deployment/.env`，填写现有用户库连接和新的论文库密码。不要把包含用户密码哈希的 `mysql.sql` 直接导入论文库；它是旧的混合快照，且论文数量未完成对齐。只有明确要迁移用户数据时，才将其中 `users`、`favorites` 导入用户库。
+把 `deployment/.env.example` 复制为 `deployment/.env`，只填写现有用户库连接和 Neo4j/JWT 配置。不要把包含用户密码哈希的 `mysql.sql` 直接导入论文库；用户数据仍由用户 MySQL 保存。
 
-导入 Neo4j 主论文到新的论文 MySQL：
+论文 SQLite 已包含主论文、可检索的完整外部论文和 FTS5 索引。若需要从主论文 JSONL 重建业务字段：
 
 ```bash
-python3 sync_mysql_from_primary.py \
-  --input primary_papers.jsonl \
-  --env /path/to/paperddl/server/.env \
-  --apply \
-  --report mysql_paper_sync_report.json
+node paperddl/server/scripts/migrate-paper-sqlite.js \
+  --db /path/to/papers_fts.db \
+  --primary primary_papers.jsonl \
+  --apply
 ```
 
-`.env` 中必须设置 `PAPER_MYSQL_HOST`、`PAPER_MYSQL_DATABASE`、`PAPER_MYSQL_USER`、`PAPER_MYSQL_PASSWORD`。后续只同步新增论文时加 `--incremental`。
+脚本会给记录增加 `record_type`：`canonical`、`external_full`、`reference_stub`。普通列表和全文检索默认只返回 `canonical`；引用占位节点保留在 Neo4j 的引用图中。
+
+Neo4j 生产实例还应用了 `record_type + paper_id`、`record_type + year` 复合索引，以及论文标题、作者、机构、资助方和 Topic 的全文索引。检索过滤会跳过不存在的 ID 和 `reference_stub`，避免占位节点挤占结果；Node 图接口默认也隐藏占位节点，可用 `includeReferenceStubs=true` 显式查看。相同论文图请求会短暂缓存，减少重复的多跳查询。
 
 ## 5. 启动接口与页面
 
@@ -90,7 +91,7 @@ Nginx 记录总耗时和上游耗时；Node、Python 日志可通过 `docker com
 
 不使用容器的源码开发：Python 3.10+ 标准库足以跑 BM25 + Neo4j HTTP，Node 建议 22 LTS。`cd paperddl && npm ci` 后，设置 Node 的 `server/.env`（参考下方），分别执行 `npm run server:dev` 和 `npm run web:dev`。Vite 已将 `/api/retrieval`、`/api/knowledge` 转给 Python，其余 `/api` 转给 Node。
 
-Node `.env` 字段：`PORT`、`USER_MYSQL_HOST`、`USER_MYSQL_PORT`、`USER_MYSQL_DATABASE`、`USER_MYSQL_USER`、`USER_MYSQL_PASSWORD`、`PAPER_MYSQL_HOST`、`PAPER_MYSQL_PORT`、`PAPER_MYSQL_DATABASE`、`PAPER_MYSQL_USER`、`PAPER_MYSQL_PASSWORD`、`NEO4J_URI`、`NEO4J_USER`、`NEO4J_PASSWORD`、`JWT_SECRET`。旧代码模式仍兼容 `MYSQL_*`，但新部署不要用一套变量指向两个数据库。本机图端口为 `bolt://127.0.0.1:17687`，Python 图地址为 `http://127.0.0.1:17474`。
+Node `.env` 字段：`PORT`、`USER_MYSQL_HOST`、`USER_MYSQL_PORT`、`USER_MYSQL_DATABASE`、`USER_MYSQL_USER`、`USER_MYSQL_PASSWORD`、`PAPER_SQLITE_PATH`、`NEO4J_URI`、`NEO4J_USER`、`NEO4J_PASSWORD`、`JWT_SECRET`。旧 `PAPER_MYSQL_*` 变量只作为回滚配置保留，不再被论文接口使用。本机图端口为 `bolt://127.0.0.1:17687`，Python 图地址为 `http://127.0.0.1:17474`。
 
 Python 可复制 `retrieval_backend/deployment/paperddl.env.example` 后设置自己的路径和图连接信息，再 `set -a; source /path/to/local.env; set +a`，执行 `bash retrieval_backend/run_retrieval_service.sh`。默认已改为便携路径和 bm25，无需 GPU。
 
@@ -110,7 +111,7 @@ docker compose -f deployment/compose.yml exec retrieval \
 - 当前迁移包支持 BM25 + Neo4j；远程 Zilliz 数据不在包里。若开发环境继续使用原 Zilliz，需单独配置访问权限；若换集群，需另导入向量。embedding 代码和开关仍保留。
 - Stage0/Stage2/精排模型代码保留在 `clstr_source`，模型权重另行准备。默认 Docker 镜像未安装这些可选依赖。
 - `/api/kg/enrich` 需要 `paperddl/tools/API_KG` 的 Python 依赖、抽取模型/API 配置；默认 Node 镜像未安装它们，因此该按需抽取接口不会仅凭基础栈就自动可用。
-- YAML 会议数据随代码提供。线上 Node 论文列表使用独立的论文 MySQL；SQLite 检索库仍由 Python BM25 服务使用，二者可以按批次分别更新。新增论文不自动同步到论文 MySQL，需运行增量同步脚本。
+- YAML 会议数据随代码提供。线上 Node 论文列表和 Python BM25 服务读取同一个 SQLite 文件；新增论文按 [增量更新说明](../retrieval_backend/INCREMENTAL_UPDATE_GUIDE.md) 更新，脚本会同步 FTS、业务字段和 Neo4j 的 `record_type`。
 - 数据包为各库独立一致性快照，不是跨库同一时间点的分布式快照；导入前后应核对 `mysql.sql.manifest.json` 和数据库包中的统计清单。
 
 ## 8. 交付验证范围

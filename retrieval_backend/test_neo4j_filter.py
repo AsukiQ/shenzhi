@@ -53,6 +53,9 @@ class Neo4jPaperFilterTest(unittest.TestCase):
         self.assertEqual(FILTER_CYPHER.count("[:HAS_TOPIC]"), 2)
         self.assertNotIn("HAS_KEYWORD", FILTER_CYPHER)
         self.assertNotIn("HAS_SUBJECT", FILTER_CYPHER)
+        self.assertIn("MATCH (p:Paper {paper_id: requested_id})", FILTER_CYPHER)
+        self.assertIn("$record_type", FILTER_CYPHER)
+        self.assertNotIn("p IS NULL", FILTER_CYPHER)
         self.assertEqual(RELATION_TYPES["keywords"], ("HAS_TOPIC",))
         self.assertEqual(RELATION_TYPES["subjects"], ("HAS_TOPIC",))
         self.assertEqual(RELATION_TYPES["venue_year"], ("PUBLISHED_IN",))
@@ -70,6 +73,7 @@ class Neo4jPaperFilterTest(unittest.TestCase):
         self.assertNotIn("AAAI", query)
         self.assertEqual(params["conference"], ["AAAI"])
         self.assertEqual(params["candidate_ids"], ["c", "a", "b"])
+        self.assertEqual(params["record_type"], "canonical")
 
     def test_healthcheck(self):
         graph = Neo4jPaperFilter(uri="bolt://unused", user="u", password="p", driver=FakeDriver(set()))
