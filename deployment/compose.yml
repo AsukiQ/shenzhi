@@ -18,10 +18,10 @@ services:
     profiles: ["local-users"]
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${USER_MYSQL_ROOT_PASSWORD:?set USER_MYSQL_ROOT_PASSWORD when using local-users}
+      MYSQL_ROOT_PASSWORD: ${USER_MYSQL_ROOT_PASSWORD:-unused-local-users-root-password}
       MYSQL_DATABASE: ${USER_MYSQL_DATABASE:-paperddl}
       MYSQL_USER: ${USER_MYSQL_USER:-paperddl}
-      MYSQL_PASSWORD: ${USER_MYSQL_PASSWORD:?set USER_MYSQL_PASSWORD when using local-users}
+      MYSQL_PASSWORD: ${USER_MYSQL_PASSWORD:-unused-local-users-password}
     volumes: ["mysql-users-data:/var/lib/mysql"]
   paper-mysql:
     image: mysql:8.0
