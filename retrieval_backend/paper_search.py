@@ -469,9 +469,10 @@ class PaperSearchIndex:
                 for token in dict.fromkeys(tokens)
             )
             rows = conn.execute(
-                "SELECT paper_id, bm25(papers_fts, 5.0, 1.0, 3.0, 2.0) AS bm "
-                "FROM papers_fts WHERE papers_fts MATCH ? AND paper_id IN "
-                "(SELECT paper_id FROM papers WHERE " + self._scope_sql(record_type) + ") ORDER BY bm LIMIT ?",
+                "SELECT papers_fts.paper_id, bm25(papers_fts, 5.0, 1.0, 3.0, 2.0) AS bm "
+                "FROM papers_fts JOIN papers AS p ON p.paper_id = papers_fts.paper_id "
+                "WHERE papers_fts MATCH ? AND " + self._scope_sql(record_type, alias="p")
+                + " ORDER BY bm LIMIT ?",
                 (match, limit),
             ).fetchall()
             return [
@@ -522,9 +523,10 @@ class PaperSearchIndex:
             groups.append("(" + " OR ".join(terms) + ")")
         match = " AND ".join(groups)
         rows = conn.execute(
-            "SELECT paper_id, bm25(papers_fts, 5.0, 1.0, 3.0, 2.0) AS bm "
-            "FROM papers_fts WHERE papers_fts MATCH ? AND paper_id IN "
-            "(SELECT paper_id FROM papers WHERE " + self._scope_sql(record_type) + ") ORDER BY bm LIMIT ?",
+            "SELECT papers_fts.paper_id, bm25(papers_fts, 5.0, 1.0, 3.0, 2.0) AS bm "
+            "FROM papers_fts JOIN papers AS p ON p.paper_id = papers_fts.paper_id "
+            "WHERE papers_fts MATCH ? AND " + self._scope_sql(record_type, alias="p")
+            + " ORDER BY bm LIMIT ?",
             (match, limit),
         ).fetchall()
         return [
