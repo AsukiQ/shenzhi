@@ -1,0 +1,18 @@
+[
+  {
+    "term_id": "knowledge_graph_completion",
+    "zh": ["知识图谱补全"],
+    "en": ["knowledge graph completion"],
+    "category": "retrieval",
+    "status": "verified",
+    "weight": 1.0
+  },
+  {
+    "term_id": "retrieval_augmented_generation",
+    "zh": ["检索增强生成"],
+    "en": ["retrieval augmented generation"],
+    "category": "retrieval",
+    "status": "verified",
+    "weight": 1.0
+  }
+]

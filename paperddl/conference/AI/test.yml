@@ -1,0 +1,15 @@
+- title: test
+  description: test
+  sub: AI
+  rank:
+    ccf: A
+    core: ''
+    thcpl: ''
+  confs:
+    - year: 2026
+      id: ''
+      link: https://test.com
+      timeline:
+        - abstract_deadline: ''
+          deadline: '2026-04-30 23:00:00'
+  source: manual

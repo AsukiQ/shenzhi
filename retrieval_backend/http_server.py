@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse, unquote
+
+LOGGER = logging.getLogger("paperddl.retrieval")
+if not LOGGER.handlers:
+    logging.basicConfig(
+        level=os.getenv("RETRIEVAL_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s retrieval %(message)s",
+    )
 
 try:  # 作为模块运行和直接运行两种方式都支持
     from .paper_search import PaperSearchIndex, SearchFilters, state_to_dict
@@ -75,6 +84,7 @@ def _request_payload(path: str, body: bytes = b"") -> dict:
         "keyword": params.get("keyword", []),
         "subject": params.get("subject", []),
         "institution": params.get("institution", []),
+        "funding": params.get("funding", []),
     }
 
 
@@ -95,6 +105,20 @@ def make_handler(
         def setup(self) -> None:
             super().setup()
             self.connection.settimeout(request_timeout)
+            self._request_started = time.monotonic()
+
+        def finish(self) -> None:
+            started = getattr(self, "_request_started", None)
+            if started is not None:
+                LOGGER.info(
+                    "request method=%s path=%s status=%s duration_ms=%.1f client=%s",
+                    self.command,
+                    urlparse(self.path).path,
+                    getattr(self, "_response_status", "unknown"),
+                    (time.monotonic() - started) * 1000.0,
+                    self.client_address[0] if self.client_address else "-",
+                )
+            return super().finish()
 
         def _authorized(self) -> bool:
             if not auth_token:
@@ -108,14 +132,21 @@ def make_handler(
             return False
 
         def _send(self, status: int, payload: dict, *, extra_headers: dict[str, str] | None = None) -> None:
+            self._response_status = status
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(raw)))
-            for name, value in (extra_headers or {}).items():
-                self.send_header(name, value)
-            self.end_headers()
-            self.wfile.write(raw)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                for name, value in (extra_headers or {}).items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(raw)
+            except (BrokenPipeError, ConnectionResetError):
+                # A timed-out browser/proxy may close the socket while an
+                # upstream dense query is still finishing. There is no
+                # response left to send and no useful server error to report.
+                return
 
         def do_GET(self):  # noqa: N802
             if not self._require_auth():
@@ -203,21 +234,51 @@ def make_handler(
                 if not value:
                     self._send(400, {"error": field_name + " is required"})
                     return
-                if request_path == "/search/by-subject" and ("offset" in params or "limit" in params):
+                top_k = int(_one(params, "top_k") or 10)
+                if top_k < 1 or top_k > 100:
+                    self._send(400, {"error": "top_k must be between 1 and 100"})
+                    return
+                offset = int(_one(params, "offset") or 0)
+                limit = int(_one(params, "limit") or top_k)
+                if offset < 0 or limit < 1 or limit > 100:
+                    self._send(400, {"error": "offset must be >= 0 and limit must be between 1 and 100"})
+                    return
+                if field_name in {"subject", "funding"}:
                     try:
-                        offset = int(_one(params, "offset") or 0)
-                        limit = int(_one(params, "limit") or 10)
                         lexical = getattr(index, "lexical_index", index)
-                        results, total = lexical.subject_page(value, offset=offset, limit=limit)
-                        self._send(200, {"results": [r.__dict__ for r in results], "total": total})
+                        relation = "subjects" if field_name == "subject" else "funding"
+                        results, total = lexical.relation_page(relation, value, offset=offset, limit=limit)
+                        state = {
+                            "query": value,
+                            "step": 1,
+                            "executed_operations": [f"BROWSE_PAPER_{field_name.upper()}"],
+                            "last_result_ids": [r.paper_id for r in results],
+                        }
+                        self._send(200, {"results": [r.__dict__ for r in results], "total": total, "state": state})
                     except (ValueError, TypeError) as exc:
                         self._send(400, {"error": str(exc)})
                     except Exception as exc:
-                        self._send(500, {"error": "subject pagination failed", "type": type(exc).__name__})
+                        self._send(500, {"error": f"{field_name} search failed", "type": type(exc).__name__})
                     return
-                payload = {"query": value, "top_k": int(_one(params, "top_k") or 10)}
-                payload[field_name] = [value]
-                self._search(payload)
+                if graph is None or not hasattr(graph, "institution_paper_page"):
+                    self._send(503, {"error": "institution search unavailable"})
+                    return
+                try:
+                    lexical = getattr(index, "lexical_index", index)
+                    paper_ids, total = graph.institution_paper_page(value, offset=offset, limit=limit)
+                    results = lexical.fetch_results(paper_ids, filters=SearchFilters(), top_k=limit,
+                                                    retrieval_mode="structured_institution")
+                    state = {
+                        "query": value,
+                        "step": 1,
+                        "executed_operations": ["BROWSE_PAPER_INSTITUTION"],
+                        "last_result_ids": [r.paper_id for r in results],
+                    }
+                    self._send(200, {"results": [r.__dict__ for r in results], "total": total, "state": state})
+                except (ValueError, TypeError) as exc:
+                    self._send(400, {"error": str(exc)})
+                except Exception as exc:
+                    self._send(500, {"error": "institution search failed", "type": type(exc).__name__})
                 return
             if request_path.startswith("/scholars/"):
                 if graph is None or not hasattr(graph, "scholar_detail"):
@@ -329,6 +390,7 @@ def make_handler(
                 keyword=_str_list(payload.get("keyword")),
                 subject=_str_list(payload.get("subject")),
                 institution=_str_list(payload.get("institution")),
+                funding=_str_list(payload.get("funding")),
             )
             filters = merge_filters(parsed.filters, explicit_filters)
             rewrite = query_rewriter.rewrite(parsed.semantic_query) if query_rewriter else None
@@ -377,6 +439,7 @@ def make_handler(
                 keyword=_str_list(payload.get("keyword")),
                 subject=_str_list(payload.get("subject")),
                 institution=_str_list(payload.get("institution")),
+                funding=_str_list(payload.get("funding")),
             )
             filters = merge_filters(parsed.filters, explicit_filters)
             rewrite = query_rewriter.rewrite(parsed.semantic_query) if query_rewriter else None
@@ -659,6 +722,13 @@ def main() -> None:
         enabled.append("clstr_stage2" if stage2_policy.enabled else "clstr_stage2_fallback")
     print(f"retrieval components: {','.join(enabled)}", flush=True)
     print(f"paper search server listening on http://{args.host}:{args.port}/search", flush=True)
+    if graph is not None and hasattr(graph, "scholar_search"):
+        def _warm_graph_browse_cache() -> None:
+            try:
+                graph.scholar_search("", limit=20, offset=0)
+            except Exception as exc:
+                print(f"graph browse cache warmup skipped: {type(exc).__name__}", flush=True)
+        threading.Thread(target=_warm_graph_browse_cache, daemon=True).start()
     try:
         try:
             server.serve_forever()

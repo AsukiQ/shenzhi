@@ -1,5 +1,8 @@
 # 索引构建
 
+日常论文数据变更可以使用 [增量更新入口](INCREMENTAL_UPDATE_GUIDE.md)，不必全量重建。
+以下流程用于需要重新构建完整索引的场景。
+
 统一入口为 `build_paper_index.sh`，从当前 SQLite 元数据快照建立新索引：
 
 ```bash

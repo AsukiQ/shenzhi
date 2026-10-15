@@ -1,16 +1,19 @@
-# Shenzhi
+# Shenzhi 知识底座
 
-论文知识图谱与混合检索服务。
+论文检索、Neo4j 知识图谱、会议日历、用户与收藏接口。代码同步自 2026-10-15 的运行版本。
 
-## 目录
+- `retrieval_backend/`：BM25/SQLite、查询解析与改写、图过滤/扩展、可选 embedding/Zilliz、HTTP API、可恢复增量更新。
+- `paperddl/server/`：Node 用户、收藏、论文列表、会议与图接口。
+- `paperddl/web/`：Vue 前端源码；当前线上静态页面另随迁移包备份，尚未确认与此源码是同一构建。
+- `paperddl/conference/`：会议日历及其研究领域 YAML。
+- `deployment/`：开发环境 Docker Compose、Nginx、备份工具及迁移文档。
+- `paper_data_pipeline/`、`shenzhi_paper_data/`：保留的数据准备、构图和校验工具。
+- `clstr_source/`：保留的可选 Stage0/精排模型及研究依赖，不是默认运行所需。
 
-- `retrieval_backend/`: BM25、Qwen/Zilliz dense、RRF、Neo4j 过滤和 HTTP API
-- `paper_data_pipeline/`: 论文数据准备与图数据流水线
-- `shenzhi_paper_data/`: rich graph 构建、校验和合并工具
-- `clstr_source/`: 可选的 CLSTR 研究与训练代码
+开发迁移入口：[deployment/DEVELOPMENT_MIGRATION.md](deployment/DEVELOPMENT_MIGRATION.md)。
 
-运行数据、模型、数据库、图谱归档和凭据不在仓库中。部署时请根据
-`retrieval_backend/deployment/paperddl.env.example` 创建本地环境文件，并单独准备
-论文 SQLite 数据库、Neo4j、模型和 Zilliz/Qwen 凭据。
+默认运行 **BM25 + Neo4j**，embedding 关闭但代码保留。通用中文翻译需要另配翻译服务，目前本地词表只有少量术语。MySQL、SQLite、Neo4j 各自承担不同接口，不会自动相互同步。
 
-线上检索接口的使用说明见 `API_USAGE_GUIDE.md`。
+日常更新：[增量更新说明](retrieval_backend/INCREMENTAL_UPDATE_GUIDE.md)。
+
+数据库、图片、模型、token 和真实 `.env` 均不提交到 GitHub。部署前请创建开发环境自己的密码和 JWT secret。

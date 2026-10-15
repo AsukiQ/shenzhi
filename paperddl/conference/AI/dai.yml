@@ -1,0 +1,29 @@
+- title: DAI
+  description: International Conference on Distributed Artificial Intelligence
+  sub: AI
+  rank:
+    ccf: C
+    core: N
+    thcpl: N
+  dblp: dai2
+  confs:
+    - year: 2025
+      id: dai2025
+      link: https://www.adai.ai/dai/2025/index.html
+      timeline:
+        - deadline: '2025-08-21 23:59:59'
+      timezone: UTC-12
+      date: November 21-24, 2025
+      place: London, United Kingdom
+    - year: 2026
+      id: dai2026
+      link: https://www.adai.ai/dai/2026/index.html
+      timeline:
+        - abstract_deadline: '2026-07-27 23:59:59'
+          deadline: '2026-08-03 23:59:59'
+          comment: 'Research / Industry Track'
+        - deadline: '2026-08-10 23:59:59'
+          comment: 'AI Paper Track'
+      timezone: AoE
+      date: November 29-December 2, 2026
+      place: Hong Kong, China

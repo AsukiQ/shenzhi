@@ -548,6 +548,20 @@ class MultiStepPaperSearch:
         graph = getattr(self.engine, "graph_filter", None)
         if graph is None or not state.candidate_ids:
             return
+        filters = state.filters
+        if not any(
+            (
+                filters.year_gte is not None,
+                filters.year_lte is not None,
+                filters.conference,
+                filters.author,
+                filters.keyword,
+                filters.subject,
+                filters.institution,
+                filters.funding,
+            )
+        ) and getattr(graph, "skip_empty_filter", False):
+            return
         try:
             state.candidate_ids = list(
                 graph.filter_candidate_ids(state.candidate_ids, filters=state.filters)
@@ -635,40 +649,49 @@ class MultiStepPaperSearch:
             return [SEARCH_PAPERS]
         legal: list[str] = []
         seeds = state.candidate_ids[: self.expansion_seed_k]
+        planned_relations = set(state.relation_plan)
         for action, relation in (
             (EXPAND_AUTHORS, "authors"),
             (EXPAND_KEYWORDS, "keywords"),
             (EXPAND_SUBJECTS, "subjects"),
         ):
-            values = self._relation_values(seeds, relation=relation, state=state)
+            # Keep explicit policy actions legal, but avoid issuing graph
+            # metadata requests for ordinary topical queries. The local
+            # SQLite relation lookup is enough to bind the action slots.
+            values = (
+                self._relation_values(seeds, relation=relation, state=state)
+                if relation in planned_relations
+                else self.index.related_values(seeds, relation=relation, limit=ACTION_SLOT_COUNT)
+            )
             legal.extend(
                 skill_id
                 for slot in range(len(values))
                 if (skill_id := action_skill_id(action, slot)) not in executed
             )
-        graph = getattr(self.engine, "graph_filter", None)
-        if callable(getattr(graph, "expand_from_papers", None)):
-            try:
-                _rows, values = graph.expand_from_papers(
-                    seeds,
-                    relation="venue_year",
-                    value_limit=ACTION_SLOT_COUNT,
-                    paper_limit=1,
-                )
-            except Exception as exc:
-                state.failures.append(f"values_venue_year_neo4j:{type(exc).__name__}")
+        if "venue_year" in planned_relations:
+            graph = getattr(self.engine, "graph_filter", None)
+            if callable(getattr(graph, "expand_from_papers", None)):
+                try:
+                    _rows, values = graph.expand_from_papers(
+                        seeds,
+                        relation="venue_year",
+                        value_limit=ACTION_SLOT_COUNT,
+                        paper_limit=1,
+                    )
+                except Exception as exc:
+                    state.failures.append(f"values_venue_year_neo4j:{type(exc).__name__}")
+                    _hits, values = self.index.expand_venue_year(
+                        seeds, limit=1, value_limit=ACTION_SLOT_COUNT
+                    )
+            else:
                 _hits, values = self.index.expand_venue_year(
                     seeds, limit=1, value_limit=ACTION_SLOT_COUNT
                 )
-        else:
-            _hits, values = self.index.expand_venue_year(
-                seeds, limit=1, value_limit=ACTION_SLOT_COUNT
+            legal.extend(
+                skill_id
+                for slot in range(len(values))
+                if (skill_id := action_skill_id(EXPAND_VENUE_YEAR, slot)) not in executed
             )
-        legal.extend(
-            skill_id
-            for slot in range(len(values))
-            if (skill_id := action_skill_id(EXPAND_VENUE_YEAR, slot)) not in executed
-        )
         if (
             RERANK_RESULTS not in executed
             and self.engine.reranker is not None
@@ -952,8 +975,19 @@ class MultiStepPaperSearch:
                     policy_metadata={"method": "executor_guard_v1"},
                 )
                 policy.observe(state.current_state_text(), stop)
+        expansion_actions = {
+            EXPAND_AUTHORS,
+            EXPAND_KEYWORDS,
+            EXPAND_SUBJECTS,
+            EXPAND_VENUE_YEAR,
+        }
+        final_candidate_ids = (
+            state.candidate_ids
+            if any(event.action in expansion_actions for event in state.events)
+            else state.candidate_ids[: max(1, min(int(top_k), 100))]
+        )
         results = self.index.fetch_results(
-            state.candidate_ids,
+            final_candidate_ids,
             filters=state.filters,
             top_k=max(1, min(int(top_k), 100)),
             score_by_id=state.score_by_id,

@@ -1,0 +1,27 @@
+- title: FORTE
+  description: International Conference on Formal Techniques for (Networked and) Distributed Systems
+  sub: NW
+  rank:
+    ccf: C
+    core: C
+    thcpl: N
+  dblp: forte
+  confs:
+    - year: 2024
+      id: forte24
+      link: https://www.discotec.org/2024/forte
+      timeline:
+        - abstract_deadline: '2024-02-02 23:59:59'
+          deadline: '2024-02-09 23:59:59'
+      timezone: AoE
+      date: June 17-21, 2024
+      place: Groningen, The Netherlands
+    - year: 2026
+      id: forte26
+      link: https://www.discotec.org/2026/forte
+      timeline:
+        - abstract_deadline: '2026-01-30 23:59:59'
+          deadline: '2026-02-06 23:59:59'
+      timezone: AoE
+      date: June 8-12, 2026
+      place: Urbino, Italy

@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-15",
+  "source_base_commit": "4c0e577",
+  "python_test_cases": 29,
+  "python_passed": 27,
+  "python_skipped_optional_live": 2,
+  "node_syntax_files": 15,
+  "frontend_build": "passed",
+  "node_smoke": {
+    "categories": 10,
+    "conferences": 354
+  },
+  "compose_config": "passed",
+  "docker_runtime": "not tested: daemon permission denied",
+  "sqlite_backup_quick_check": "ok",
+  "neo4j_dump_info": {
+    "format": "Neo4j ZSTD Dump",
+    "files": 66,
+    "uncompressed_bytes": 3262498293
+  },
+  "default_mode": "bm25+neo4j",
+  "embedding_enabled": false
+}

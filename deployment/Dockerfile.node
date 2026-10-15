@@ -1,0 +1,11 @@
+FROM node:22-bookworm-slim
+WORKDIR /app/paperddl
+COPY paperddl/package*.json ./
+COPY paperddl/server/package*.json ./server/
+COPY paperddl/web/package*.json ./web/
+RUN npm ci --omit=dev --workspace server --include-workspace-root
+COPY paperddl/server ./server
+COPY paperddl/conference ./conference
+COPY paperddl/tools ./tools
+WORKDIR /app/paperddl/server
+CMD ["node", "src/index.js"]

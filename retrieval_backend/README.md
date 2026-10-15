@@ -8,6 +8,9 @@
 可选 SkillRouter Reranker → 返回`。模型与图组件均可选；没有 GPU 或 Neo4j 时可降级为
 BM25/SQLite 关系回退，且不会改变 canonical `paper_id` 和返回协议。
 
+日常新增或修改论文使用 [增量更新说明](INCREMENTAL_UPDATE_GUIDE.md)。
+`import_new_batch.py` 支持预览、按 ID 更新 Neo4j/SQLite/FTS、参考文献升级为主论文及失败后按批次恢复。
+
 中文查询支持
 
 论文正文和当前静态索引主要是英文，因此中文请求统一先经过

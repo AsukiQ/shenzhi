@@ -83,6 +83,7 @@ RELATED_TABLES = {
     "authors": "paper_authors",
     "keywords": "paper_keywords",
     "subjects": "paper_subjects",
+    "funding": "paper_funding",
 }
 
 # Small, auditable corrections for common English paper-search typos. This is
@@ -152,6 +153,7 @@ class SearchFilters:
     keyword: list[str] = field(default_factory=list)
     subject: list[str] = field(default_factory=list)
     institution: list[str] = field(default_factory=list)
+    funding: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -201,15 +203,32 @@ class PaperSearchIndex:
         self.db_path = str(db_path)
         self._local = threading.local()
         manifest = Path(self.db_path).with_name('paper_images.json')
+        self._image_manifest = manifest
+        self._image_manifest_lock = threading.Lock()
+        self._image_manifest_signature = None
         self.paper_images = json.loads(manifest.read_text(encoding='utf-8')) if manifest.is_file() else {}
 
     def image_id_for(self, paper_id: str) -> str | None:
+        # Importers publish the manifest by atomic rename. Reload it on demand
+        # so images added during an online import do not require an API restart.
+        if self._image_manifest.is_file():
+            stat = self._image_manifest.stat()
+            signature = (stat.st_mtime_ns, stat.st_size)
+            if signature != self._image_manifest_signature:
+                with self._image_manifest_lock:
+                    if signature != self._image_manifest_signature:
+                        self.paper_images = json.loads(self._image_manifest.read_text(encoding='utf-8'))
+                        self._image_manifest_signature = signature
         images = self.paper_images.get(paper_id) or []
         if not images:
             return None
         if len(images) != 1:
             raise ValueError(f'Multiple images for paper: {paper_id}')
-        return Path(images[0]['image_path']).name
+        image_path = images[0]['image_path']
+        # Images stored under the served images/ directory are returned as a URL path; others keep the bare filename.
+        if (Path(self.db_path).parent.parent / image_path).is_file():
+            return '/' + image_path
+        return Path(image_path).name
 
     def connect(self, *, writable: bool = False) -> sqlite3.Connection:
         if writable:
@@ -219,7 +238,9 @@ class PaperSearchIndex:
             if not path.is_file():
                 raise FileNotFoundError(f"paper index not found: {path}")
             conn = sqlite3.connect(
-                f"{path.as_uri()}?mode=ro&immutable=1",
+                # The importer updates this database while the API is running.
+                # immutable=1 bypasses locking/WAL and can keep serving stale pages.
+                f"{path.as_uri()}?mode=ro",
                 uri=True,
             )
         conn.row_factory = sqlite3.Row
@@ -303,9 +324,8 @@ class PaperSearchIndex:
                          json.dumps(authors, ensure_ascii=False), json.dumps(keywords, ensure_ascii=False),
                          json.dumps(subjects, ensure_ascii=False), json.dumps(funding, ensure_ascii=False), doc.get('image_id')),
                     )
-                    # ``replace`` 模式下索引为空；同一批文档的 paper_id 已由
-                    # 数据准备阶段保证唯一。为避免对 12 万条记录逐条扫描 FTS，
-                    # 增量更新请先用 ``build(..., replace=True)`` 重建索引。
+                    # Full builds start with an empty index. For online incremental
+                    # updates use import_new_batch.py, which replaces FTS by rowid.
                     conn.execute(
                         "INSERT INTO papers_fts(paper_id,title,abstract,keywords,subjects) VALUES (?,?,?,?,?)",
                         (paper_id, _fts_text(doc.get("title")), _fts_text(doc.get("abstract")),
@@ -383,6 +403,7 @@ class PaperSearchIndex:
         authors = json.loads(row["authors_json"])
         keywords = json.loads(row["keywords_json"])
         subjects = json.loads(row["subjects_json"])
+        funding = json.loads(row["funding_json"] or "[]") if "funding_json" in row.keys() else []
         if filters.year_gte is not None and (
             row["year"] is None or row["year"] < filters.year_gte
         ):
@@ -398,6 +419,8 @@ class PaperSearchIndex:
         if filters.keyword and not any(cls._match(keyword, filters.keyword) for keyword in keywords):
             return False
         if filters.subject and not any(cls._match(subject, filters.subject) for subject in subjects):
+            return False
+        if filters.funding and not any(cls._match(name, filters.funding) for name in funding):
             return False
         return True
 
@@ -574,11 +597,18 @@ class PaperSearchIndex:
         return results
 
     def subject_page(self, subject: str, *, offset: int = 0, limit: int = 10) -> tuple[list[SearchResult], int]:
-        """Return an exact, indexed subject page and its total count."""
-        subject = str(subject or "").strip()
+        """Return a subject page without invoking lexical or dense recall."""
+        return self.relation_page("subjects", subject, offset=offset, limit=limit)
+
+    def relation_page(self, relation: str, value: str, *, offset: int = 0, limit: int = 10) -> tuple[list[SearchResult], int]:
+        """Return a paged metadata relation match from its normalized table."""
+        table = RELATED_TABLES.get(str(relation))
+        if table is None:
+            raise ValueError(f"unsupported paper relation: {relation}")
+        subject = str(value or "").strip()
         offset, limit = int(offset), int(limit)
         if not subject:
-            raise ValueError("subject is required")
+            raise ValueError(f"{relation.rstrip('s')} is required")
         if offset < 0:
             raise ValueError("offset must be >= 0")
         if limit < 1 or limit > 100:
@@ -586,11 +616,23 @@ class PaperSearchIndex:
         conn = self.read_connection()
         key = subject.casefold()
         total = int(conn.execute(
-            "SELECT COUNT(DISTINCT paper_id) FROM paper_subjects WHERE value_key = ?", (key,)
+            f"SELECT COUNT(DISTINCT paper_id) FROM {table} WHERE value_key = ?", (key,)
         ).fetchone()[0])
+        match_sql = "value_key = ?"
+        match_value = key
+        if total == 0:
+            # The public contract permits a name fragment. Keep the indexed
+            # exact path as the common case, and only scan for a substring
+            # when exact matching has no result.
+            escaped = key.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            match_sql = "value_key LIKE ? ESCAPE '\\'"
+            match_value = f"%{escaped}%"
+            total = int(conn.execute(
+                f"SELECT COUNT(DISTINCT paper_id) FROM {table} WHERE {match_sql}", (match_value,)
+            ).fetchone()[0])
         rows = conn.execute(
-            "SELECT paper_id FROM paper_subjects WHERE value_key = ? "
-            "GROUP BY paper_id ORDER BY paper_id LIMIT ? OFFSET ?", (key, limit, offset)
+            f"SELECT paper_id FROM {table} WHERE {match_sql} "
+            "GROUP BY paper_id ORDER BY paper_id LIMIT ? OFFSET ?", (match_value, limit, offset)
         ).fetchall()
         ids = [str(row[0]) for row in rows]
         return self.fetch_results(ids, filters=SearchFilters()), total

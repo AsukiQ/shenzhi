@@ -43,3 +43,16 @@ retrieval_backend/deployment/*.yaml
 *_smoke.json
 release_manifest.json
 .merged-review-path
+
+# Development migration and local credentials
+node_modules/
+**/node_modules/
+**/dist/
+*.dump
+*.sql
+*.sql.gz
+*.tar.zst
+runtime-data/
+migration-data/
+!deployment/.env.example
+!retrieval_backend/data/domain_glossary.v1.json

@@ -333,7 +333,8 @@ class QueryParser:
             conference=list(dict.fromkeys(conferences)),
             author=list(dict.fromkeys(authors)),
             keyword=list(dict.fromkeys(keywords)),
-            subject=list(dict.fromkeys(subjects)),
+        subject=list(dict.fromkeys(subjects)),
+        funding=[],
         )
         return ParsedQuery(original, semantic, original, filters, tuple(extracted))
 
@@ -349,4 +350,5 @@ def merge_filters(parsed: SearchFilters, explicit: SearchFilters) -> SearchFilte
         keyword=list(dict.fromkeys(explicit.keyword or parsed.keyword)),
         subject=list(dict.fromkeys(explicit.subject or parsed.subject)),
         institution=list(dict.fromkeys(explicit.institution or parsed.institution)),
+        funding=list(dict.fromkeys(explicit.funding or parsed.funding)),
     )

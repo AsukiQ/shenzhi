@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import sys
 import threading
+import time
+import logging
 from typing import Any, Iterable, Mapping, Protocol
 
 try:
@@ -36,6 +38,8 @@ except ImportError:
     )
     from query_rewrite import contains_cjk
     from graph_query import infer_graph_query_plan
+
+LOGGER = logging.getLogger("paperddl.retrieval.pipeline")
 
 
 class DenseRetriever(Protocol):
@@ -514,6 +518,8 @@ class HybridPaperSearch:
             retrieval_query = mixed_text if re.search(r"[A-Za-z]{2,}", mixed_text) else ""
         rankings: dict[str, list[CandidateHit]] = {}
         operations: list[str] = []
+        timings: dict[str, float] = {}
+        pipeline_started = time.perf_counter()
         lexical_query = retrieval_query
         if lexical_query and not contains_cjk(lexical_query):
             corrected_query = rewrite_fuzzy_tokens(lexical_query)
@@ -528,14 +534,17 @@ class HybridPaperSearch:
             or filters.keyword
             or filters.subject
             or filters.institution
+            or filters.funding
         )
         # There is one static lexical route. Chinese requests are rewritten
         # before entering it; a pure metadata request uses an explicit browse
         # route instead of pretending that an empty query is BM25.
         if retrieval_query:
+            stage_started = time.perf_counter()
             rankings["bm25"] = self.lexical_index.recall(
                 lexical_query, limit=self.recall_k
             )
+            timings["bm25_ms"] = (time.perf_counter() - stage_started) * 1000
             operations.append("RECALL_PAPER_BM25")
         elif has_graph_constraints and bool(variants.get("structured_only")):
             rankings["filtered"] = self.lexical_index.browse(
@@ -548,10 +557,16 @@ class HybridPaperSearch:
         # Prefix recall remains a bounded, low-weight fallback. It is only
         # enabled for the single English retrieval route and only contributes
         # candidates absent from exact BM25 results.
-        if retrieval_query and not contains_cjk(retrieval_query):
+        if (
+            retrieval_query
+            and not contains_cjk(retrieval_query)
+            and len(rankings.get("bm25", [])) < min(self.recall_k, 200)
+        ):
+            stage_started = time.perf_counter()
             fuzzy_hits = self.lexical_index.recall_prefix(
-                lexical_query, limit=self.recall_k
+                lexical_query, limit=min(self.recall_k, 200)
             )
+            timings["prefix_ms"] = (time.perf_counter() - stage_started) * 1000
             exact_ids = {hit.paper_id for hit in rankings.get("bm25", [])}
             if fuzzy_hits and any(hit.paper_id not in exact_ids for hit in fuzzy_hits):
                 rankings["bm25_fuzzy"] = fuzzy_hits
@@ -619,10 +634,12 @@ class HybridPaperSearch:
 
         if self.graph_filter is not None and has_graph_constraints:
             try:
+                stage_started = time.perf_counter()
                 ordered_ids = self.graph_filter.filter_candidate_ids(
                     ordered_ids,
                     filters=filters,
                 )
+                timings["neo4j_filter_ms"] = (time.perf_counter() - stage_started) * 1000
                 operations.append("FILTER_PAPER_NEO4J")
             except Exception as exc:
                 # Text/local metadata filtering remains available if Neo4j has
@@ -646,6 +663,7 @@ class HybridPaperSearch:
             top_k,
             self.rerank_k if self.reranker is not None and apply_reranker else top_k,
         )
+        stage_started = time.perf_counter()
         candidates = self.lexical_index.fetch_results(
             ordered_ids,
             filters=filters,
@@ -654,6 +672,7 @@ class HybridPaperSearch:
             source_scores_by_id=components,
             retrieval_mode="+".join(mode_parts),
         )
+        timings["fetch_ms"] = (time.perf_counter() - stage_started) * 1000
         reranker_query = translated_query or (
             semantic_query
             if semantic_query and not contains_cjk(semantic_query)
@@ -685,6 +704,13 @@ class HybridPaperSearch:
             operations.append("RERANK_PAPER_SKILLROUTER")
 
         results = candidates[:top_k]
+        timings["total_ms"] = (time.perf_counter() - pipeline_started) * 1000
+        if timings["total_ms"] >= 50:
+            LOGGER.info(
+                "search_timing total_ms=%.1f query_len=%d top_k=%d recall_k=%d candidates=%d rankings=%s timings=%s",
+                timings["total_ms"], len(query), top_k, self.recall_k,
+                len(ordered_ids), {key: len(value) for key, value in rankings.items()}, timings,
+            )
         for rank, result in enumerate(results, start=1):
             result.rank = rank
         new_state.step += 1
@@ -746,6 +772,7 @@ class DensePaperSearch:
             or filters.keyword
             or filters.subject
             or filters.institution
+            or filters.funding
         )
         if self.graph_filter is not None and has_graph_constraints:
             ordered_ids = self.graph_filter.filter_candidate_ids(

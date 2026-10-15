@@ -1,0 +1,26 @@
+{
+	"name": "paperddl-server",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"dev": "node ./src/index.js",
+		"start": "node ./src/index.js",
+		"smoke": "node ./src/smoke.js",
+		"papers:import": "node ./src/import-papers.js",
+		"auth:create-admin": "node ./src/create-admin.js"
+	},
+	"dependencies": {
+		"bcryptjs": "^3.0.3",
+		"cookie-parser": "^1.4.7",
+		"cors": "^2.8.5",
+		"dotenv": "^16.4.7",
+		"express": "^4.19.2",
+		"express-rate-limit": "^8.5.1",
+		"js-yaml": "^4.1.0",
+		"jsonwebtoken": "^9.0.3",
+		"mysql2": "^3.22.3",
+		"neo4j-driver": "^6.1.0",
+		"paperddl": "file:.."
+	}
+}

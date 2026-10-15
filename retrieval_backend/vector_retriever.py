@@ -8,6 +8,9 @@ wired into RRF after a smoke test, while BM25 remains the safe fallback.
 from __future__ import annotations
 
 import os
+import threading
+import time
+from collections import OrderedDict
 from typing import Any
 
 try:
@@ -29,6 +32,8 @@ class ZillizDenseRetriever:
         embedding_api_key: str | None = None,
         embedding_model: str | None = None,
         timeout: float = 60.0,
+        cache_size: int | None = None,
+        cache_ttl_seconds: float | None = None,
     ) -> None:
         self.component_name = "zilliz_dense"
         self.collection = collection or os.getenv("ZILLIZ_COLLECTION", "papers_qwen3_embedding_8b")
@@ -40,21 +45,82 @@ class ZillizDenseRetriever:
             dimensions=(int(os.getenv("QWEN_EMBEDDING_DIMENSIONS", "0")) or None),
         )
         self.client = _zilliz_client(uri or os.environ["ZILLIZ_URI"], token or os.environ["ZILLIZ_TOKEN"])
+        self.cache_size = max(
+            0,
+            int(
+                cache_size
+                if cache_size is not None
+                else os.getenv("DENSE_QUERY_CACHE_SIZE", "256")
+            ),
+        )
+        self.cache_ttl_seconds = max(
+            0.0,
+            float(
+                cache_ttl_seconds
+                if cache_ttl_seconds is not None
+                else os.getenv("DENSE_QUERY_CACHE_TTL_SECONDS", "300")
+            ),
+        )
+        self._cache: OrderedDict[tuple[str, int], tuple[float, list[CandidateHit]]] = OrderedDict()
+        self._cache_lock = threading.Lock()
+
+    def clear_cache(self) -> None:
+        """Drop cached dense results after an embedding/index refresh."""
+
+        with self._cache_lock:
+            self._cache.clear()
+
+    def _cached_recall(self, key: tuple[str, int]) -> list[CandidateHit] | None:
+        if self.cache_size <= 0 or self.cache_ttl_seconds <= 0:
+            return None
+        now = time.monotonic()
+        with self._cache_lock:
+            cached = self._cache.get(key)
+            if cached is None:
+                return None
+            timestamp, hits = cached
+            if now - timestamp >= self.cache_ttl_seconds:
+                self._cache.pop(key, None)
+                return None
+            self._cache.move_to_end(key)
+            return list(hits)
+
+    def _store_recall(self, key: tuple[str, int], hits: list[CandidateHit]) -> None:
+        if self.cache_size <= 0 or self.cache_ttl_seconds <= 0:
+            return
+        with self._cache_lock:
+            self._cache[key] = (time.monotonic(), list(hits))
+            self._cache.move_to_end(key)
+            while len(self._cache) > self.cache_size:
+                self._cache.popitem(last=False)
 
     def healthcheck(self) -> dict[str, Any]:
         try:
             exists = bool(self.client.has_collection(collection_name=self.collection))
-            return {"status": "ready" if exists else "missing_collection", "collection": self.collection}
+            with self._cache_lock:
+                cache_entries = len(self._cache)
+            return {
+                "status": "ready" if exists else "missing_collection",
+                "collection": self.collection,
+                "cache_size": self.cache_size,
+                "cache_ttl_seconds": self.cache_ttl_seconds,
+                "cache_entries": cache_entries,
+            }
         except Exception as exc:
             return {"status": "error", "collection": self.collection, "error": f"{type(exc).__name__}: {exc}"}
 
     def recall(self, query: str, *, limit: int) -> list[CandidateHit]:
+        bounded_limit = max(1, min(int(limit), 1000))
+        cache_key = (str(query).strip().casefold(), bounded_limit)
+        cached = self._cached_recall(cache_key)
+        if cached is not None:
+            return cached
         vector = self.embedder.embed([str(query)])[0]
         rows = self.client.search(
             collection_name=self.collection,
             data=[vector],
             anns_field="embedding",
-            limit=max(1, min(int(limit) * 3, 1000)),
+            limit=max(1, min(bounded_limit * 3, 1000)),
             output_fields=["paper_id", "chunk_index"],
             search_params={"metric_type": "COSINE"},
         )
@@ -75,4 +141,6 @@ class ZillizDenseRetriever:
             value = scores[0] + (0.25 * scores[1] if len(scores) > 1 else 0.0)
             scored.append((paper_id, value))
         scored.sort(key=lambda x: (-x[1], x[0]))
-        return [CandidateHit(pid, score, rank, "dense") for rank, (pid, score) in enumerate(scored[:max(1, int(limit))], 1)]
+        hits = [CandidateHit(pid, score, rank, "dense") for rank, (pid, score) in enumerate(scored[:bounded_limit], 1)]
+        self._store_recall(cache_key, hits)
+        return hits

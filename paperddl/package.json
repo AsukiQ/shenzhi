@@ -1,0 +1,19 @@
+{
+	"name": "paperddl",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"workspaces": [
+		"web",
+		"server"
+	],
+	"scripts": {
+		"web:dev": "npm --prefix web run dev",
+		"web:build": "npm --prefix web run build",
+		"web:preview": "npm --prefix web run preview",
+		"server:dev": "npm --prefix server run dev",
+		"server:start": "npm --prefix server run start",
+		"server:smoke": "npm --prefix server run smoke",
+		"papers:import": "npm --prefix server run papers:import"
+	}
+}

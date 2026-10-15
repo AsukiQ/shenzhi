@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from typing import Any
 from urllib import error, request
 
@@ -55,6 +56,12 @@ WHERE p IS NULL OR (
       WHERE toLower(coalesce(i.name, '')) CONTAINS toLower(wanted)
          OR toLower(coalesce(i.institution_id, '')) CONTAINS toLower(wanted))
   })
+  AND (size($funding) = 0 OR EXISTS {
+    MATCH (p)-[:FUNDED_BY]->(f:Funding)
+    WHERE any(wanted IN $funding
+      WHERE toLower(coalesce(f.name, '')) CONTAINS toLower(wanted)
+         OR toLower(coalesce(f.funding_id, '')) CONTAINS toLower(wanted))
+  })
 )
 RETURN requested_id AS paper_id, candidate_index
 ORDER BY candidate_index
@@ -80,6 +87,8 @@ ORDER BY value
 
 
 class Neo4jPaperFilter:
+    skip_empty_filter = True
+
     def __init__(
         self,
         *,
@@ -112,12 +121,15 @@ class Neo4jPaperFilter:
 
     def healthcheck(self) -> dict[str, Any]:
         with self.driver.session(database=self.database) as session:
-            row = session.run("MATCH (p:Paper) RETURN count(p) AS paper_count").single()
-            funding = session.run("MATCH (f:Funding) RETURN count(f) AS funding_count").single()
+            row = session.run(
+                """CALL { MATCH (p:Paper) RETURN count(p) AS paper_count }
+                   CALL { MATCH (f:Funding) RETURN count(f) AS funding_count }
+                   RETURN paper_count, funding_count"""
+            ).single()
         return {
             "status": "ok",
             "paper_count": int(row["paper_count"]),
-            "funding_count": int(funding["funding_count"]),
+            "funding_count": int(row.get("funding_count", 0)),
             "database": self.database,
         }
 
@@ -138,10 +150,70 @@ class Neo4jPaperFilter:
             "keyword": list(filters.keyword),
             "subject": list(filters.subject),
             "institution": list(filters.institution),
+            "funding": list(filters.funding),
         }
         with self.driver.session(database=self.database) as session:
             rows = session.run(FILTER_CYPHER, **params)
             return [str(row["paper_id"]) for row in rows]
+
+    def institution_paper_page(
+        self, institution: str, *, offset: int = 0, limit: int = 10
+    ) -> tuple[list[str], int]:
+        """Page papers linked to an institution without lexical/dense recall."""
+        institution = str(institution or "").strip()
+        offset, limit = int(offset), int(limit)
+        if not institution:
+            raise ValueError("institution is required")
+        if offset < 0 or limit < 1 or limit > 100:
+            raise ValueError("offset must be >= 0 and limit must be between 1 and 100")
+        match = """
+        MATCH (p:Paper)-[:AUTHORED_BY]->(:Author)-[:AFFILIATED_WITH]-(i:Institution)
+        WHERE toLower(coalesce(i.name, '')) CONTAINS toLower($institution)
+           OR toLower(coalesce(i.institution_id, '')) CONTAINS toLower($institution)
+        RETURN DISTINCT p
+        """
+        with self.driver.session(database=self.database) as session:
+            total_row = session.run(
+                """MATCH (p:Paper)-[:AUTHORED_BY]->(:Author)-[:AFFILIATED_WITH]-(i:Institution)
+                   WHERE toLower(coalesce(i.name, '')) CONTAINS toLower($institution)
+                      OR toLower(coalesce(i.institution_id, '')) CONTAINS toLower($institution)
+                   RETURN count(DISTINCT p) AS total""",
+                institution=institution,
+            ).single()
+            rows = session.run(
+                match.replace("RETURN DISTINCT p", "RETURN DISTINCT p.paper_id AS paper_id ORDER BY paper_id SKIP $offset LIMIT $limit"),
+                institution=institution, offset=offset, limit=limit,
+            )
+            ids = [str(row["paper_id"]) for row in rows]
+        return ids, int(total_row["total"] if total_row else 0)
+
+    def scholar_search(self, query: str = "", *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
+        """Search authors with indexed name lookup and bounded paper counts."""
+        query = str(query or '').strip()
+        limit, offset = int(limit), int(offset)
+        if not 1 <= limit <= 100 or offset < 0:
+            raise ValueError("limit must be 1..100 and offset must be >= 0")
+        if not query:
+            statement = """
+            MATCH (a:Author)
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name,
+                   count { (a)<-[:AUTHORED_BY]-() } AS paper_count
+            ORDER BY paper_count DESC, name, scholar_id
+            SKIP $offset LIMIT $limit
+            """
+        else:
+            statement = """
+            MATCH (a:Author)
+            WHERE toLower(coalesce(a.name, '')) CONTAINS toLower($query)
+               OR toLower(coalesce(a.author_id, '')) CONTAINS toLower($query)
+            OPTIONAL MATCH (p:Paper)-[:AUTHORED_BY]->(a)
+            WITH a, count(DISTINCT p) AS paper_count
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name,
+                   paper_count
+            ORDER BY paper_count DESC, name, scholar_id
+            SKIP $offset LIMIT $limit
+            """
+        return self._run(statement, {"query": query, "limit": limit, "offset": offset})
 
     def expand_from_papers(
         self,
@@ -178,6 +250,8 @@ class Neo4jPaperFilter:
 class Neo4jHttpPaperFilter:
     """Neo4j transactional HTTP adapter using only the Python standard library."""
 
+    skip_empty_filter = True
+
     def __init__(
         self,
         *,
@@ -195,6 +269,9 @@ class Neo4jHttpPaperFilter:
         self.authorization = f"Basic {token}"
         self.database = database
         self.timeout_seconds = float(timeout_seconds)
+        self._scholar_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = {}
+        self._entity_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = {}
+        self._health_cache: tuple[float, dict[str, Any]] | None = None
 
     def _run(self, statement: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
         payload = json.dumps(
@@ -245,7 +322,11 @@ class Neo4jHttpPaperFilter:
         limit, offset = int(limit), int(offset)
         if not 1 <= limit <= 100 or offset < 0:
             raise ValueError("limit must be 1..100 and offset must be >= 0")
-        return self._run(
+        key = ("funding", str(query or "").strip().casefold(), limit, offset)
+        cached = self._entity_cache.get(key)
+        if cached and time.monotonic() - cached[0] < 30.0:
+            return [dict(row) for row in cached[1]]
+        rows = self._run(
             """
             MATCH (f:Funding)
             WHERE $query = '' OR toLower(coalesce(f.name, '')) CONTAINS toLower($query)
@@ -258,9 +339,19 @@ class Neo4jHttpPaperFilter:
             """,
             {"query": str(query or '').strip(), "limit": limit, "offset": offset},
         )
+        self._entity_cache[key] = (time.monotonic(), [dict(row) for row in rows])
+        while len(self._entity_cache) > 256:
+            self._entity_cache.pop(next(iter(self._entity_cache)))
+        return rows
 
     def institution_search(self, query: str = "", *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         query = str(query or '').strip()
+        bounded_limit = max(1, min(100, int(limit)))
+        bounded_offset = max(0, int(offset))
+        key = ("institution", query.casefold(), bounded_limit, bounded_offset)
+        cached = self._entity_cache.get(key)
+        if cached and time.monotonic() - cached[0] < 30.0:
+            return [dict(row) for row in cached[1]]
         rows = self._run(
             """
             MATCH (i:Institution)
@@ -273,8 +364,11 @@ class Neo4jHttpPaperFilter:
             ORDER BY paper_count DESC, name, institution_id
             SKIP $offset LIMIT $limit
             """,
-            {"query": query, "offset": max(0, int(offset)), "limit": max(1, min(100, int(limit)))},
+            {"query": query, "offset": bounded_offset, "limit": bounded_limit},
         )
+        self._entity_cache[key] = (time.monotonic(), [dict(row) for row in rows])
+        while len(self._entity_cache) > 256:
+            self._entity_cache.pop(next(iter(self._entity_cache)))
         return rows
 
     def scholar_search(self, query: str = "", *, subject: str = "", funding: str = "", limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
@@ -282,6 +376,10 @@ class Neo4jHttpPaperFilter:
         query = str(query or '').strip()
         subject = str(subject or '').strip()
         funding = str(funding or '').strip()
+        cache_key = (query.casefold(), subject.casefold(), funding.casefold(), limit, offset)
+        cached = self._scholar_cache.get(cache_key)
+        if cached and time.monotonic() - cached[0] < 30.0:
+            return [dict(row) for row in cached[1]]
         if subject and not query and not funding:
             statement = """
             MATCH (p:Paper)-[:HAS_TOPIC]->(t:Topic)
@@ -298,6 +396,13 @@ class Neo4jHttpPaperFilter:
             MATCH (p)-[:AUTHORED_BY]->(a:Author)
             WITH a, count(DISTINCT p) AS paper_count
             RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name, paper_count
+            ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
+            """
+        elif not query and not subject and not funding:
+            statement = """
+            MATCH (a:Author)
+            RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name,
+                   count { (a)<-[:AUTHORED_BY]-() } AS paper_count
             ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
             """
         else:
@@ -318,10 +423,14 @@ class Neo4jHttpPaperFilter:
             RETURN a.author_id AS scholar_id, coalesce(a.name, a.author_id) AS name, size(papers) AS paper_count
             ORDER BY paper_count DESC, name, scholar_id SKIP $offset LIMIT $limit
             """
-        return self._run(
+        rows = self._run(
             statement,
             {"query": query, "subject": subject, "funding": funding, "offset": max(0, int(offset)), "limit": max(1, min(100, int(limit)))},
         )
+        self._scholar_cache[cache_key] = (time.monotonic(), [dict(row) for row in rows])
+        while len(self._scholar_cache) > 256:
+            self._scholar_cache.pop(next(iter(self._scholar_cache)))
+        return rows
 
     def scholar_detail(self, scholar_id: str, *, paper_limit: int = 50) -> dict[str, Any] | None:
         rows = self._run(
@@ -352,16 +461,27 @@ class Neo4jHttpPaperFilter:
         return rows[0] if rows else None
 
     def healthcheck(self) -> dict[str, Any]:
-        rows = self._run("MATCH (p:Paper) RETURN count(p) AS paper_count", {})
-        funding_rows = self._run("MATCH (f:Funding) RETURN count(f) AS funding_count", {})
+        cached = self._health_cache
+        if cached and time.monotonic() - cached[0] < 15.0:
+            return dict(cached[1])
+        rows = self._run(
+            """
+            CALL { MATCH (p:Paper) RETURN count(p) AS paper_count }
+            CALL { MATCH (f:Funding) RETURN count(f) AS funding_count }
+            RETURN paper_count, funding_count
+            """,
+            {},
+        )
         if not rows:
             raise RuntimeError("Neo4j HTTP healthcheck returned no rows")
-        return {
+        result = {
             "status": "ok",
             "paper_count": int(rows[0]["paper_count"]),
-            "funding_count": int(funding_rows[0]["funding_count"]),
+            "funding_count": int(rows[0]["funding_count"]),
             "database": self.database,
         }
+        self._health_cache = (time.monotonic(), result)
+        return dict(result)
 
     def filter_candidate_ids(
         self,
@@ -382,9 +502,32 @@ class Neo4jHttpPaperFilter:
                 "keyword": list(filters.keyword),
                 "subject": list(filters.subject),
                 "institution": list(filters.institution),
+                "funding": list(filters.funding),
             },
         )
         return [str(row["paper_id"]) for row in rows]
+
+    def institution_paper_page(
+        self, institution: str, *, offset: int = 0, limit: int = 10
+    ) -> tuple[list[str], int]:
+        """Page papers linked to an institution without lexical/dense recall."""
+        institution = str(institution or "").strip()
+        offset, limit = int(offset), int(limit)
+        if not institution:
+            raise ValueError("institution is required")
+        if offset < 0 or limit < 1 or limit > 100:
+            raise ValueError("offset must be >= 0 and limit must be between 1 and 100")
+        base = """
+        MATCH (p:Paper)-[:AUTHORED_BY]->(:Author)-[:AFFILIATED_WITH]-(i:Institution)
+        WHERE toLower(coalesce(i.name, '')) CONTAINS toLower($institution)
+           OR toLower(coalesce(i.institution_id, '')) CONTAINS toLower($institution)
+        """
+        total_rows = self._run(base + "RETURN count(DISTINCT p) AS total", {"institution": institution})
+        rows = self._run(
+            base + "RETURN DISTINCT p.paper_id AS paper_id ORDER BY paper_id SKIP $offset LIMIT $limit",
+            {"institution": institution, "offset": offset, "limit": limit},
+        )
+        return [str(row["paper_id"]) for row in rows], int(total_rows[0]["total"] if total_rows else 0)
 
     def expand_from_papers(
         self,

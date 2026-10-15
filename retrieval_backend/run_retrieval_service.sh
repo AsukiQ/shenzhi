@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=${SHENZHI_ROOT:-/data/home/scyb713/run/xzf/AAAI/autodl-tmp/shenzhi}
-PYTHON_BIN=${PYTHON_BIN:-/data/home/scyb713/run/miniconda3/envs/xzf/bin/python}
-CLSTR_SOURCE=${CLSTR_SOURCE:-/data/home/scyb713/run/xzf/AAAI/autodl-tmp/clstrs/clstr-qwen06-native-sync-smoke-source}
+ROOT=${SHENZHI_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+PYTHON_BIN=${PYTHON_BIN:-$(command -v python3)}
+CLSTR_SOURCE=${CLSTR_SOURCE:-$ROOT/clstr_source}
 STAGE0_ROOT=${STAGE0_ROOT:-$ROOT/outputs/paper_vnext_stage0_skillrouter_full}
 STAGE0_CHECKPOINT=${STAGE0_CHECKPOINT:-}
 STAGE0_SKILLS=${STAGE0_SKILLS:-$STAGE0_ROOT/selected_skills.jsonl}
@@ -15,7 +15,7 @@ QUERY_TRANSLATOR_URL=${QUERY_TRANSLATOR_URL:-}
 RERANKER_MODEL=${RERANKER_MODEL:-/data/home/scyb713/run/xzf/AAAI/autodl-tmp/clstrs/clstr/.cache/hf_models/SkillRouter-Reranker-0.6B}
 HOST=${RETRIEVAL_HOST:-127.0.0.1}
 PORT=${RETRIEVAL_PORT:-8080}
-MODE=${RETRIEVAL_MODE:-hybrid}
+MODE=${RETRIEVAL_MODE:-bm25}
 
 case "$MODE" in
   bm25|hybrid|full) ;;
@@ -46,7 +46,7 @@ args=(
   --translator-timeout "${TRANSLATOR_TIMEOUT:-0.8}"
 )
 
-if [[ "${ZILLIZ_DENSE_ENABLED:-}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+if [[ "$MODE" != "bm25" && "${ZILLIZ_DENSE_ENABLED:-}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
   args+=(--zilliz-dense --zilliz-collection "${ZILLIZ_COLLECTION:-paper_embedding_chunks_v1_1024}")
 fi
 

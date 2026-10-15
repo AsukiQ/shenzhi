@@ -1,0 +1,26 @@
+- title: ICALP
+  description: EATCS International Colloquium on Automata, Languages, and Programming
+  sub: CT
+  rank:
+    ccf: B
+    core: A*
+    thcpl: A
+  dblp: icalp
+  confs:
+    - year: 2025
+      id: icalp25
+      link: https://conferences.au.dk/icalp2025
+      timeline:
+        - deadline: '2025-02-08 23:59:59'
+          comment: 'Submissions'
+      timezone: AoE
+      date: July 8-11, 2025
+      place: Aarhus, Denmark
+    - year: 2026
+      id: icalp26
+      link: https://icalppodcspaa2026.cs.rhul.ac.uk/
+      timeline:
+        - deadline: '2026-02-06 23:59:59'
+      timezone: AoE
+      date: July 6-10, 2026
+      place: London, UK

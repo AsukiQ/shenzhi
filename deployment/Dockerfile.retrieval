@@ -1,0 +1,5 @@
+FROM python:3.11-slim
+WORKDIR /app
+COPY retrieval_backend /app/retrieval_backend
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SHENZHI_ROOT=/app PYTHON_BIN=/usr/local/bin/python3
+CMD ["bash", "retrieval_backend/run_retrieval_service.sh"]

@@ -1,0 +1,25 @@
+- title: ACCV
+  description: Asian Conference on Computer Vision
+  sub: AI
+  rank:
+    ccf: C
+    core: B
+    thcpl: N
+  dblp: accv
+  confs:
+    - year: 2024
+      id: accv24
+      link: https://accv2024.org/
+      timeline:
+        - deadline: '2024-07-02 23:59:59'
+      timezone: UTC-12
+      date: December 8-12, 2024
+      place: Hanoi, Vietnam
+    - year: 2026
+      id: accv26
+      link: https://accv2026.org/
+      timeline:
+        - deadline: '2026-07-05 23:59:59'
+      timezone: UTC-12
+      date: December 14-18, 2026
+      place: Osaka, Japan
