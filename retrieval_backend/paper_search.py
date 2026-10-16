@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS paper_funding (
     paper_id TEXT NOT NULL, value TEXT NOT NULL, value_key TEXT NOT NULL,
     position INTEGER NOT NULL, PRIMARY KEY (paper_id, value_key)
 );
+CREATE INDEX IF NOT EXISTS idx_paper_funding_value ON paper_funding(value_key, paper_id);
 """
 
 RELATED_TABLES = {
@@ -469,10 +470,10 @@ class PaperSearchIndex:
                 for token in dict.fromkeys(tokens)
             )
             rows = conn.execute(
-                "SELECT papers_fts.paper_id, bm25(papers_fts, 5.0, 1.0, 3.0, 2.0) AS bm "
+                "SELECT papers_fts.paper_id, rank AS bm "
                 "FROM papers_fts JOIN papers AS p ON p.paper_id = papers_fts.paper_id "
-                "WHERE papers_fts MATCH ? AND " + self._scope_sql(record_type, alias="p")
-                + " ORDER BY bm LIMIT ?",
+                "WHERE papers_fts MATCH ? AND rank MATCH 'bm25(5.0,1.0,3.0,2.0)' AND " + self._scope_sql(record_type, alias="p")
+                + " ORDER BY rank LIMIT ?",
                 (match, limit),
             ).fetchall()
             return [
@@ -523,10 +524,10 @@ class PaperSearchIndex:
             groups.append("(" + " OR ".join(terms) + ")")
         match = " AND ".join(groups)
         rows = conn.execute(
-            "SELECT papers_fts.paper_id, bm25(papers_fts, 5.0, 1.0, 3.0, 2.0) AS bm "
+            "SELECT papers_fts.paper_id, rank AS bm "
             "FROM papers_fts JOIN papers AS p ON p.paper_id = papers_fts.paper_id "
-            "WHERE papers_fts MATCH ? AND " + self._scope_sql(record_type, alias="p")
-            + " ORDER BY bm LIMIT ?",
+            "WHERE papers_fts MATCH ? AND rank MATCH 'bm25(5.0,1.0,3.0,2.0)' AND " + self._scope_sql(record_type, alias="p")
+            + " ORDER BY rank LIMIT ?",
             (match, limit),
         ).fetchall()
         return [
@@ -654,7 +655,7 @@ class PaperSearchIndex:
         conn = self.read_connection()
         key = subject.casefold()
         total = int(conn.execute(
-            f"SELECT COUNT(DISTINCT m.paper_id) FROM {table} m JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.value_key = ?", (key,)
+            f"SELECT COUNT(DISTINCT m.paper_id) FROM {table} m CROSS JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.value_key = ?", (key,)
         ).fetchone()[0])
         match_sql = "value_key = ?"
         match_value = key
@@ -666,10 +667,10 @@ class PaperSearchIndex:
             match_sql = "value_key LIKE ? ESCAPE '\\'"
             match_value = f"%{escaped}%"
             total = int(conn.execute(
-                f"SELECT COUNT(DISTINCT m.paper_id) FROM {table} m JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.{match_sql}", (match_value,)
+                f"SELECT COUNT(DISTINCT m.paper_id) FROM {table} m CROSS JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.{match_sql}", (match_value,)
             ).fetchone()[0])
         rows = conn.execute(
-            f"SELECT m.paper_id FROM {table} m JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.{match_sql} "
+            f"SELECT m.paper_id FROM {table} m CROSS JOIN papers p ON p.paper_id=m.paper_id WHERE p.record_type='canonical' AND m.{match_sql} "
             "GROUP BY m.paper_id ORDER BY m.paper_id LIMIT ? OFFSET ?", (match_value, limit, offset)
         ).fetchall()
         ids = [str(row[0]) for row in rows]

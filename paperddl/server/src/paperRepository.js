@@ -5,7 +5,10 @@ const COUNT_CACHE_TTL_MS = 30_000;
 const pageCache = new Map();
 const PAGE_CACHE_TTL_MS = 10_000;
 const aggregateCache = new Map();
-const AGGREGATE_CACHE_TTL_MS = 30_000;
+// Venue/track aggregates are read-mostly metadata. Keep them warm across
+// normal page refreshes; a service restart or paper import refreshes the
+// process and rebuilds the cache from SQLite.
+const AGGREGATE_CACHE_TTL_MS = 5 * 60_000;
 const RECORD_TYPES = new Set(["canonical", "external_full", "all"]);
 
 function parseJsonArray(value) {

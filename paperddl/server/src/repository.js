@@ -4,6 +4,39 @@ import yaml from "js-yaml";
 
 const YAML_EXT = ".yml";
 
+// Conference metadata is read-only for normal requests and spans a few
+// hundred YAML files. Keep one short lived, shared cache per data root so a
+// page refresh does not reopen every file. Writes invalidate both entries.
+const metadataCache = new Map();
+const CATEGORY_CACHE_TTL_MS = 5 * 60 * 1000;
+const CONFERENCE_CACHE_TTL_MS = 60 * 1000;
+
+async function cachedMetadata(key, ttlMs, loader) {
+	const now = Date.now();
+	const cached = metadataCache.get(key);
+	if (cached?.value && now - cached.createdAt < ttlMs) return cached.value;
+	if (cached?.promise) return cached.promise;
+
+	const promise = Promise.resolve()
+		.then(loader)
+		.then((value) => {
+			metadataCache.set(key, { createdAt: Date.now(), value });
+			return value;
+		})
+		.catch((error) => {
+			metadataCache.delete(key);
+			throw error;
+		});
+	metadataCache.set(key, { createdAt: now, promise });
+	return promise;
+}
+
+export function clearMetadataCache(dataRoot) {
+	const root = path.resolve(dataRoot);
+	metadataCache.delete(`categories:${root}`);
+	metadataCache.delete(`conferences:${root}`);
+}
+
 async function readYamlFile(filePath) {
 	const raw = await fs.readFile(filePath, "utf-8");
 	const parsed = yaml.load(raw);
@@ -35,12 +68,12 @@ function pickDeadline(conf) {
 	return undefined;
 }
 
-export async function loadCategories(dataRoot) {
+async function readCategories(dataRoot) {
 	const typesPath = path.join(dataRoot, "types.yml");
 	return readYamlFile(typesPath);
 }
 
-export async function loadConferences(dataRoot) {
+async function readConferences(dataRoot) {
 	const entries = await fs.readdir(dataRoot, { withFileTypes: true });
 	const conferences = [];
 
@@ -60,6 +93,16 @@ export async function loadConferences(dataRoot) {
 	}
 
 	return conferences;
+}
+
+export async function loadCategories(dataRoot) {
+	const root = path.resolve(dataRoot);
+	return cachedMetadata(`categories:${root}`, CATEGORY_CACHE_TTL_MS, () => readCategories(root));
+}
+
+export async function loadConferences(dataRoot) {
+	const root = path.resolve(dataRoot);
+	return cachedMetadata(`conferences:${root}`, CONFERENCE_CACHE_TTL_MS, () => readConferences(root));
 }
 
 export function withComputedDeadline(conf) {
@@ -90,6 +133,7 @@ export async function saveConference(dataRoot, payload) {
 	const normalized = { ...payload, sub };
 	list.push(normalized);
 	await writeYamlFile(targetFile, list);
+	clearMetadataCache(dataRoot);
 
 	return { file: path.relative(dataRoot, targetFile) };
 }

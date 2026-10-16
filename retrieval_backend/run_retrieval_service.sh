@@ -46,6 +46,13 @@ args=(
   --translator-timeout "${TRANSLATOR_TIMEOUT:-0.8}"
 )
 
+# Warm the SQLite FTS pages during startup in every mode. Without this, the
+# first user search after a restart pays the cold-disk cost (often seconds)
+# even though subsequent identical requests are fast.
+if [[ "${WARMUP_ENABLED:-1}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+  args+=(--warmup-query "${WARMUP_QUERY:-knowledge graph retrieval}")
+fi
+
 if [[ "$MODE" != "bm25" && "${ZILLIZ_DENSE_ENABLED:-}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
   args+=(--zilliz-dense --zilliz-collection "${ZILLIZ_COLLECTION:-paper_embedding_chunks_v1_1024}")
 fi

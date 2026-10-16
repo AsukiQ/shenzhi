@@ -329,7 +329,26 @@ app.post("/api/conferences", authenticate, requireAdmin, async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`[paperddl-server] listening on http://localhost:${port}`);
-  console.log(`[paperddl-server] data root: ${dataRoot}`);
+async function startServer() {
+  // Prime the read-mostly metadata caches before accepting traffic. The first
+  // venue aggregate otherwise has to scan the full SQLite paper table and the
+  // first conference request has to parse every YAML file.
+  const warmup = await Promise.allSettled([
+    loadCategories(dataRoot),
+    loadConferences(dataRoot),
+    Promise.resolve().then(() => listPaperVenues("canonical"))
+  ]);
+  const failed = warmup.filter((item) => item.status === "rejected").length;
+  if (failed) console.warn(`[paperddl-server] metadata warmup completed with ${failed} failure(s)`);
+  else console.log("[paperddl-server] metadata caches warmed");
+
+  app.listen(port, () => {
+    console.log(`[paperddl-server] listening on http://localhost:${port}`);
+    console.log(`[paperddl-server] data root: ${dataRoot}`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error("[paperddl-server] startup failed", error);
+  process.exitCode = 1;
 });

@@ -1,0 +1,780 @@
+{
+  "base": "http://158.247.231.197:18088",
+  "generated_at_utc": "2026-10-16T02:24:24Z",
+  "paper_id": "paper:17203_aaai:911ff38f19e8",
+  "scholar_id": "author:legacy:f1ce255aceabf63b1c578466",
+  "checks": [
+    {
+      "method": "POST",
+      "path": "/api/retrieval/search",
+      "status": 200,
+      "ms": 201.8,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "state",
+          "query_parse",
+          "query_rewrite"
+        ]
+      },
+      "error": null,
+      "name": "retrieval search POST",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/search?q=graph%20neural%20network&top_k=3",
+      "status": 200,
+      "ms": 210.5,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "total",
+          "total_exact",
+          "state",
+          "query_parse",
+          "query_rewrite"
+        ]
+      },
+      "error": null,
+      "name": "retrieval search GET",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/retrieval/multistep-search",
+      "status": 200,
+      "ms": 215.8,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "state",
+          "query_parse",
+          "query_rewrite"
+        ]
+      },
+      "error": null,
+      "name": "retrieval multistep search",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/kg/search?q=graph&limit=3",
+      "status": 200,
+      "ms": 72.4,
+      "json": true,
+      "shape": {
+        "type": "array",
+        "length": 3
+      },
+      "error": null,
+      "name": "knowledge graph title search",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/scholars/search?q=Marcel%20Binz&limit=3&offset=0",
+      "status": 200,
+      "ms": 19.5,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "query"
+        ]
+      },
+      "error": null,
+      "name": "scholar search",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/search/by-subject?subject=reinforcement&offset=0&limit=2",
+      "status": 200,
+      "ms": 16.9,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "total",
+          "state"
+        ]
+      },
+      "error": null,
+      "name": "subject paper search",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/search/by-funding?funding=NSF&top_k=2",
+      "status": 200,
+      "ms": 6.6,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "total",
+          "state"
+        ]
+      },
+      "error": null,
+      "name": "funding paper search",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/fundings/search?q=NSF&limit=2&offset=0",
+      "status": 200,
+      "ms": 23.2,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "query"
+        ]
+      },
+      "error": null,
+      "name": "funding candidate search",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/search/by-institution?institution=Stanford&top_k=2",
+      "status": 200,
+      "ms": 68.5,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "total",
+          "state"
+        ]
+      },
+      "error": null,
+      "name": "institution paper search",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/institutions/search?q=Stanford&limit=2&offset=0",
+      "status": 200,
+      "ms": 18.1,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "query"
+        ]
+      },
+      "error": null,
+      "name": "institution candidate search",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/knowledge/papers/summary",
+      "status": 200,
+      "ms": 65.9,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "paper_count"
+        ]
+      },
+      "error": null,
+      "name": "paper summary",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/knowledge/research-assets/summary",
+      "status": 200,
+      "ms": 3.2,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "research_asset_count"
+        ]
+      },
+      "error": null,
+      "name": "research asset summary",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/kg/paper?paperId=paper%3A17203_aaai%3A911ff38f19e8",
+      "status": 200,
+      "ms": 20.7,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "paper_id",
+          "title",
+          "authors",
+          "year",
+          "venue",
+          "abstract",
+          "doi",
+          "pdf_url",
+          "record_type"
+        ]
+      },
+      "error": null,
+      "name": "paper detail",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/kg/graph?paperId=paper%3A17203_aaai%3A911ff38f19e8&depth=1",
+      "status": 200,
+      "ms": 134.2,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "rootId",
+          "nodes",
+          "lines"
+        ]
+      },
+      "error": null,
+      "name": "paper graph default",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/kg/graph?paperId=paper%3A17203_aaai%3A911ff38f19e8&depth=1&includeReferenceStubs=true",
+      "status": 200,
+      "ms": 95.2,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "rootId",
+          "nodes",
+          "lines"
+        ]
+      },
+      "error": null,
+      "name": "paper graph including reference stubs",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/scholars/author%3Alegacy%3Af1ce255aceabf63b1c578466",
+      "status": 200,
+      "ms": 18.2,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "scholar_id",
+          "name",
+          "institutions",
+          "paper_count",
+          "years",
+          "conferences",
+          "topics",
+          "funding",
+          "coauthors",
+          "papers"
+        ]
+      },
+      "error": null,
+      "name": "scholar detail",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/papers?limit=2&offset=0",
+      "status": 200,
+      "ms": 103.4,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ]
+      },
+      "error": null,
+      "name": "paper list",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/papers/venues",
+      "status": 200,
+      "ms": 3.6,
+      "json": true,
+      "shape": {
+        "type": "array",
+        "length": 121
+      },
+      "error": null,
+      "name": "paper venues",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/papers/tracks?conference=AAAI",
+      "status": 200,
+      "ms": 7.8,
+      "json": true,
+      "shape": {
+        "type": "array",
+        "length": 4181
+      },
+      "error": null,
+      "name": "paper tracks",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/categories",
+      "status": 200,
+      "ms": 4.3,
+      "json": true,
+      "shape": {
+        "type": "array",
+        "length": 10
+      },
+      "error": null,
+      "name": "categories",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/conferences",
+      "status": 200,
+      "ms": 17.4,
+      "json": true,
+      "shape": {
+        "type": "array",
+        "length": 354
+      },
+      "error": null,
+      "name": "conferences",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "status": 200,
+      "ms": 50.9,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "ok",
+          "time",
+          "papers"
+        ]
+      },
+      "error": null,
+      "name": "main health",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/health",
+      "status": 200,
+      "ms": 54.4,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "status",
+          "components",
+          "lexical",
+          "graph",
+          "dense"
+        ]
+      },
+      "error": null,
+      "name": "retrieval health",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/ready",
+      "status": 200,
+      "ms": 77.8,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "status",
+          "components",
+          "lexical",
+          "graph",
+          "dense",
+          "ready"
+        ]
+      },
+      "error": null,
+      "name": "retrieval readiness",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 401,
+      "ms": 3.7,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "message"
+        ]
+      },
+      "error": null,
+      "name": "auth me unauthenticated contract",
+      "expected": [
+        401
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/favorites",
+      "status": 401,
+      "ms": 3.2,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "message"
+        ]
+      },
+      "error": null,
+      "name": "favorites list unauthenticated contract",
+      "expected": [
+        401
+      ],
+      "pass": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "status": 200,
+      "ms": 3.7,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "ok"
+        ]
+      },
+      "error": null,
+      "name": "logout idempotent",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/retrieval/search",
+      "status": 200,
+      "ms": 3.3,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "results",
+          "state",
+          "query_parse",
+          "query_rewrite"
+        ]
+      },
+      "error": null,
+      "name": "search empty query structured contract",
+      "expected": [
+        200
+      ],
+      "pass": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/retrieval/multistep-search",
+      "status": 400,
+      "ms": 2.5,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "error"
+        ]
+      },
+      "error": null,
+      "name": "multistep missing query",
+      "expected": [
+        400
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/search/by-subject",
+      "status": 400,
+      "ms": 1.9,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "error"
+        ]
+      },
+      "error": null,
+      "name": "subject missing parameter",
+      "expected": [
+        400
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/search/by-funding",
+      "status": 400,
+      "ms": 2.0,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "error"
+        ]
+      },
+      "error": null,
+      "name": "funding missing parameter",
+      "expected": [
+        400
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/retrieval/search/by-institution",
+      "status": 400,
+      "ms": 1.6,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "error"
+        ]
+      },
+      "error": null,
+      "name": "institution missing parameter",
+      "expected": [
+        400
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/kg/paper",
+      "status": 400,
+      "ms": 3.0,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "message"
+        ]
+      },
+      "error": null,
+      "name": "paper detail missing parameter",
+      "expected": [
+        400
+      ],
+      "pass": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/kg/graph",
+      "status": 400,
+      "ms": 2.3,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "message"
+        ]
+      },
+      "error": null,
+      "name": "graph missing parameter",
+      "expected": [
+        400
+      ],
+      "pass": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/register",
+      "status": 400,
+      "ms": 18.2,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "message"
+        ]
+      },
+      "error": null,
+      "name": "register missing fields",
+      "expected": [
+        400
+      ],
+      "pass": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/login",
+      "status": 400,
+      "ms": 4.3,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "message"
+        ]
+      },
+      "error": null,
+      "name": "login missing fields",
+      "expected": [
+        400
+      ],
+      "pass": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/favorites",
+      "status": 401,
+      "ms": 3.3,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "message"
+        ]
+      },
+      "error": null,
+      "name": "favorite write unauthenticated contract",
+      "expected": [
+        401
+      ],
+      "pass": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/favorites/audit-nonexistent",
+      "status": 401,
+      "ms": 2.6,
+      "json": true,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "message"
+        ]
+      },
+      "error": null,
+      "name": "favorite delete unauthenticated contract",
+      "expected": [
+        401
+      ],
+      "pass": true
+    }
+  ],
+  "passed": 38,
+  "failed": 0
+}

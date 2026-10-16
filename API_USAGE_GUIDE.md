@@ -5,7 +5,7 @@
 服务地址：
 
 ```text
-http://47.110.47.12
+http://158.247.231.197:18088
 ```
 
 接口统一返回 JSON。发送 POST 请求时使用：
@@ -25,12 +25,12 @@ POST /api/retrieval/search
 完整地址：
 
 ```text
-http://47.110.47.12/api/retrieval/search
+http://158.247.231.197:18088/api/retrieval/search
 ```
 
 用于根据标题、摘要和论文元数据检索论文，支持中英文查询、模糊匹配和条件过滤。
 
-当前融合 BM25、模糊召回和 Zilliz 向量召回，使用 RRF 排序。主题和基金名称也参与关键词检索。
+当前线上使用 BM25 关键词召回、有限模糊召回和 Neo4j 条件过滤，使用 RRF 排序。embedding/Zilliz dense 当前关闭，健康检查中的 `dense` 为 `null`。主题和基金名称也参与关键词检索。
 
 请求示例：
 
@@ -97,7 +97,7 @@ GET /api/retrieval/search?q=graph%20neural%20network&top_k=10
         "dense_rrf": 0.006493506493506494,
         "rrf": 0.022886949116457313
       },
-      "retrieval_mode": "bm25+zilliz_dense"
+      "retrieval_mode": "bm25"
     }
   ],
   "state": {},
@@ -160,7 +160,7 @@ GET /api/kg/paper?paperId={paper_id}
 示例：
 
 ```js
-const url = `http://47.110.47.12/api/kg/paper?paperId=${encodeURIComponent(paperId)}`;
+const url = `http://158.247.231.197:18088/api/kg/paper?paperId=${encodeURIComponent(paperId)}`;
 const response = await fetch(url);
 const paper = await response.json();
 ```
@@ -183,7 +183,7 @@ const paper = await response.json();
 ## 4. 引用和知识图谱
 
 ```http
-GET /api/kg/graph?paperId={paper_id}&depth=1
+GET /api/kg/graph?paperId={paper_id}&depth=1&includeReferenceStubs=false
 ```
 
 参数：
@@ -192,6 +192,7 @@ GET /api/kg/graph?paperId={paper_id}&depth=1
 | --- | --- | --- |
 | `paperId` | 是 | 检索结果中的论文 ID |
 | `depth` | 否 | 图谱展开深度，可选 1 至 3，建议使用 1 |
+| `includeReferenceStubs` | 否 | 是否包含 `reference_stub` 占位节点，默认 `false` |
 
 返回示例：
 
@@ -263,6 +264,8 @@ GET /api/categories
 GET /api/conferences
 ```
 
+`/api/papers`、`/api/papers/venues` 和 `/api/papers/tracks` 支持 `record_type=canonical`（默认）、`external_full` 或 `all`。`/api/categories` 返回会议 YAML 的分类筛选项，不是论文 Topic。
+
 ## 7. 用户和收藏
 
 ```http
@@ -308,9 +311,9 @@ GET /api/retrieval/health
 GET /api/retrieval/ready
 ```
 
-- `/api/health`：检查主业务服务。
-- `/api/retrieval/health`：检查检索服务进程。
-- `/api/retrieval/ready`：检查检索服务是否准备完成。
+- `/api/health`：检查主业务服务，并返回 SQLite 的 `recordCounts`。
+- `/api/retrieval/health`：检查检索服务进程、BM25、Neo4j 和 dense 状态。
+- `/api/retrieval/ready`：检查检索服务是否准备完成；就绪时 `ready=true`。
 
 ## 9. 状态码
 
