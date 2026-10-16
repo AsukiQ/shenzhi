@@ -1,347 +1,112 @@
 # 论文检索与知识图谱 API 使用手册
 
-## 1. 基本信息
+## 基本信息
 
-服务地址：
+服务地址：http://158\.247\.231\.197:18088
 
-```text
-http://158.247.231.197:18088
-```
+接口统一返回 JSON。POST 请求需设置请求头：`Content-Type: application/json`；登录态基于 Cookie，浏览器请求需携带 `credentials: "include"`。
 
-接口统一返回 JSON。发送 POST 请求时使用：
+## 接口总览
 
-```http
-Content-Type: application/json
-```
+|**业务需求**|**方法**|**路径**|**功能说明**|**请求参数与示例**|**返回示例**|
+|---|---|---|---|---|---|
+|**论文检索**<br>用户输入关键词、年份、会议等条件查找相关论文；或沿作者、主题等关系链路扩展查找；已知标题时按标题快速定位。|POST|`/api/retrieval/search`<br>|论文增强检索（主入口）：按标题、摘要、元数据检索，融合 BM25、模糊召回与 Zilliz 向量召回，RRF 排序；支持中英文、模糊匹配与条件过滤。也可用 GET：`/api/retrieval/search?q=...&top_k=10`<br>|**参数：**<br>query \(string, 必填\) 查询内容<br>top\_k \(int, 默认10\) 返回数量，建议≤20<br>year\_gte / year\_lte \(int\) 年份范围<br>conference / author / keyword / subject \(string\[\]\) 过滤列表<br>**请求体：**<br>`{`<br>`"query": "2022年以后图神经网络",`<br>`"top_k": 10, "year_gte": 2022,`<br>`"year_lte": 2026, "conference": ["AAAI"],`<br>`"author": [], "keyword": [], "subject": []`<br>`}`<br>按基金查找时将基金名写入 query，无独立 funding 参数。|`{`<br>`"results": [{`<br>`"paper_id": "paper:2605.24041v2",`<br>`"title": "...", "abstract": "...",`<br>`"conference": "ICML", "year": 2026,`<br>`"authors": [...], "keywords": [...],`<br>`"subjects": [...], "funding": [...],`<br>`"image_id": null, "score": 0.022,`<br>`"rank": 1, "source_scores": {},`<br>`"retrieval_mode": "bm25+fuzzy+zilliz_dense"`<br>`}],`<br>`"state": {}, "query_parse": {},`<br>`"query_rewrite": {}`<br>`}`<br>subjects 为图谱主题；funding 为基金列表；authors 可能由图谱回填、顺序非署名序；image\_id 为文件名（非完整 URL）。|
+||POST|`/api/retrieval/multistep-search`|多步关系检索：含作者、主题等关系约束的复杂查询。普通检索优先用 search。|**请求体：**<br>`{`<br>`"query": "同一作者在相同主题下的其他论文",`<br>`"top_k": 10, "max_steps": 6`<br>`}`|结构同 search，按关系多步扩展召回。|
+||GET|`/api/kg/search?q={关键词}&limit=20`|按论文标题快速定位。需检索标题和摘要时用 /api/retrieval/search。|**参数：**<br>q \(string\) 标题关键词<br>limit \(int\) 返回数量 1–50，默认 20|匹配的论文列表。|
+|**学者检索**<br>按姓名查找学者并获取学者画像。<br>|GET|`/api/retrieval/scholars/search?q={姓名}&limit=20&offset=0`|按姓名或 author\_id 片段模糊检索学者，返回稳定的 scholar\_id 和论文数。|**参数：**<br>q \(string\) 姓名或 author\_id 片段<br>limit \(int, 默认20, 最大100\)<br>offset \(int, 默认0\)<br>**示例：**<br>`/api/retrieval/scholars/search?q=Marcel%20Binz&limit=20`|`{`<br>`"results": [{"scholar_id":"author:...", "name":"Marcel Binz", "paper_count":9}],`<br>`"query":"Marcel Binz"`<br>`}`<br>使用返回的 scholar\_id 获取详情。|
+||GET|`/api/retrieval/scholars/{scholar_id}`|获取学者画像。|scholar\_id 必须使用搜索结果返回的稳定 ID，并进行 URL 编码；不要直接用姓名作为 ID。|`{`<br>`"scholar_id":"author:...", "name":"Marcel Binz",`<br>`"paper_count":9, "years":[2022,2023,2024],`<br>`"conferences":[...], "topics":[...], "funding":[],`<br>`"institutions":[], "coauthors":[...], "papers":[...]`<br>`}`|
+|**主题检索**<br>按主题检索论文|GET|`/api/retrieval/search/by-subject?subject={主题}&offset=0&limit=10`|按主题检索论文，返回当前页论文及匹配总数。<br>|**参数：**<br>subject \(string, 必填\) 主题片段<br>offset \(int, 默认0, ≥0\) 分页偏移<br>limit \(int, 默认10, 1–100\) 当前页返回数量<br>top\_k \(int, 兼容旧调用\) 返回前 top\_k 篇论文<br>**示例：**<br>`/api/retrieval/search/by-subject?subject=reinforcement&offset=40&limit=10`<br>第 5 页可按 `offset=(page-1)*limit` 计算。|`{`<br>`"results": [...], "total": 1824`<br>`}`<br>results 中每项为论文；total 为匹配主题的论文总数，offset 超出范围时 results 为 \[\]。|
+|**基金检索**<br>按基金检索论文|GET|`/api/retrieval/search/by-funding?funding={基金}&top_k=10`|按基金检索论文，返回论文结果列表。|**参数：**<br>funding \(string, 必填\) 基金名称片段<br>top\_k \(int, 默认10\) 返回前 top\_k 篇相关论文<br>**示例：**<br>`/api/retrieval/search/by-funding?funding=NSF&top_k=10`|结构同论文检索，返回 results、state 等字段；results 中每项为论文。|
+|**基金候选检索**<br>按关键词查找基金|GET|`/api/retrieval/fundings/search`|按基金名称或 ID 片段匹配，不区分大小写；返回基金列表，按关联论文数降序排列。|**参数：**<br>q \(string, 可选\) 关键词，为空时浏览；中文或特殊字符需 URL 编码<br>limit \(int, 默认20, 1–100\)<br>offset \(int, 默认0, ≥0\) 分页偏移<br>**示例：**<br>`/api/retrieval/fundings/search?q=NSF&limit=20&offset=0`|`{`<br>`"results": [{`<br>`"funding_id": "funding:...",`<br>`"name": "...", "paper_count": 1`<br>`}], "query": "NSF"`<br>`}`<br>paper\_count 为通过作者关系关联到的去重论文数，无匹配时 results 为 \[\]。|
+|**机构检索**<br>按机构检索论文|GET<br>|`/api/retrieval/search/by-institution?institution={机构}&top_k=10`|按机构名称或机构 ID 检索论文，返回论文结果列表；机构条件通过图谱中的论文—作者—机构关系进行过滤。|**参数：**<br>institution \(string, 必填\) 机构名称或机构 ID 片段<br>top\_k \(int, 默认10\) 返回前 top\_k 篇相关论文<br>**示例：**<br>`/api/retrieval/search/by-institution?institution=Stanford&top_k=10`|结构同论文检索，返回 results、state 等字段；results 中每项为论文。|
+|**机构候选检索**<br>按关键词查找机构<br>|GET<br>|`/api/retrieval/institutions/search?q={关键词}&limit=20&offset=0`|按机构名称或机构 ID 片段检索机构，不区分大小写，返回机构候选列表及当前图谱中的关联论文数。按论文数降序排列。|**参数：**<br>q \(string, 可选\) 机构名称或 ID 片段；为空时分页浏览机构<br>limit \(int, 默认20, 最大100\)<br>offset \(int, 默认0\) 分页偏移<br>**示例：**<br>`/api/retrieval/institutions/search?q=Stanford&limit=1`|`{"results":[{"institution_id":"institution:stanford_university","name":"Stanford University","paper_count":116}],"query":"Stanford"}`<br>paper\_count 为通过作者关系关联到的去重论文数，无匹配时 results 为 \[\]。|
+|**论文库总览统计**<br>获取知识底座中的论文总数|GET|`/api/knowledge/papers/summary`|返回当前知识底座中的论文数量，用于总览页面展示。<br>|无请求参数。<br>**示例：**<br>`/api/knowledge/papers/summary`|`{"paper_count":536241}`|
+|**研究资产总览统计**<br>获取项目、专利、基金统一资产数量|GET|`/api/knowledge/research-assets/summary`|项目、专利、基金当前统一按 Funding 资产统计，不区分三类类型。|无请求参数。<br>**示例：**<br>`/api/knowledge/research-assets/summary`|`{"research_asset_count":7353}`<br>该数量代表统一 Funding 库中的实体数。|
+|**论文详情**<br>用户点击某篇论文，查看完整元数据、摘要、DOI 与 PDF 链接。|GET|`/api/kg/paper?paperId={paper_id}`|按 paperId 获取论文详情。paperId 从检索结果取得，调用需 URL 编码。|**路径参数：**<br>paperId \(string, 必填\)<br>**示例：**<br>`fetch("/api/kg/paper?paperId=" +`<br>`encodeURIComponent(id))`|`{`<br>`"paper_id": "paper:17203_...",`<br>`"title": "...", "authors": [],`<br>`"year": 2021, "venue": "AAAI",`<br>`"abstract": "...", "doi": "...",`<br>`"pdf_url": "..."`<br>`}`|
+|**引用关系与知识图谱**<br>查看一篇论文引用了谁、被谁引用，以及关联的作者、机构、方法、基金、主题、会议等节点。|GET|`/api/kg/graph?paperId={paper_id}&depth=1`|获取论文引用关系与知识图谱。from=当前论文表示引用了 to；to=当前论文表示被 from 引用。|**参数：**<br>paperId \(string, 必填\) 论文 ID<br>depth \(int, 可选\) 展开深度 1–3，建议 1<br>|`{`<br>`"rootId": "当前论文ID",`<br>`"nodes": [],`<br>`"lines": [{`<br>`"from": "论文A", "to": "论文B",`<br>`"text": "CITES",`<br>`"data": {"type": "CITES"}`<br>`}]`<br>`}`|
+|**论文库浏览与筛选**<br>按会议、年份、track 等条件浏览、分页查看论文列表；同时为筛选器下拉框提供会议、track、分类等元数据选项。|GET|`/api/papers`|论文列表，支持多条件筛选与分页。|**参数：**<br>q \(string\) 搜索关键词<br>conference \(string\) 会议名<br>year \(int\) 发表年份<br>track \(string\) track 名<br>limit \(int, 默认20\) 返回数量<br>offset \(int, 默认0\) 分页偏移<br>**示例：**<br>`/api/papers?q=graph&conference=AAAI&year=2024&limit=20&offset=0`|符合条件的论文列表。|
+||GET|`/api/papers/venues`|获取所有出版物/会议列表（供筛选器）。|无参数。|出版物/会议列表。|
+||GET|`/api/papers/tracks?conference=AAAI`|获取指定会议的 track 列表（供筛选器）。|conference \(string\) 会议名。|track 列表。|
+||GET|`/api/categories`|获取论文分类列表（供筛选器）。|无参数。|分类列表。|
+||GET|`/api/conferences`|获取所有会议列表（供筛选器）。|无参数。|会议列表。|
+|**用户注册与登录**<br>新用户注册账号、登录获取会话、退出登录，以及在页面加载时识别当前登录用户。|POST|`/api/auth/register`|用户注册。|**请求体：**<br>`{"username":"...","password":"..."}`|注册结果。|
+||POST|`/api/auth/login`|用户登录，成功后写 Cookie。|**请求体：**<br>`{"username":"username","password":"password"}`|登录态 Cookie。|
+||POST|`/api/auth/logout`|退出登录。|无请求体。|清除登录态。|
+||GET|`/api/auth/me`|获取当前登录用户信息。|需登录态 Cookie。|当前用户信息。|
+|**收藏管理**<br>用户查看自己的收藏、添加感兴趣的论文/会议、以及取消收藏。|GET|`/api/favorites`|获取当前用户收藏列表。|需登录态 Cookie。|收藏列表。|
+||POST|`/api/favorites`|添加收藏。|**请求体：**<br>`{"conferenceId":"conference-id"}`|添加结果。|
+||DELETE|`/api/favorites/{conferenceId}`|取消指定收藏。|**路径参数：**<br>conferenceId \(string\) 要取消的收藏 ID。|删除结果。|
+|**服务健康检查**<br>部署上线、监控巡检时确认主业务服务与检索服务是否正常、是否就绪。|GET|`/api/health`|检查主业务服务是否正常。|无参数。|服务健康状态。|
+||GET|`/api/retrieval/health`|检查检索服务进程是否存活。|无参数。|进程健康状态。|
+||GET|`/api/retrieval/ready`|检查检索服务是否加载完成、可对外服务。|无参数。|就绪状态。|
 
-## 2. 论文检索
+## 状态码
 
-### 增强检索
+|**状态码**|**说明**|
+|---|---|
+|200|请求成功|
+|201|创建成功|
+|400|参数错误或缺少必填参数|
+|401|未登录或认证失败|
+|404|论文或资源不存在|
+|413|请求内容过大|
+|429|请求过于频繁|
+|500|服务内部错误|
+|503|服务暂时不可用|
 
-```http
-POST /api/retrieval/search
-```
 
-完整地址：
 
-```text
-http://158.247.231.197:18088/api/retrieval/search
-```
+> （注：部分内容由豆包工作 AI 生成）
 
-用于根据标题、摘要和论文元数据检索论文，支持中英文查询、模糊匹配和条件过滤。
+## 实现状态与口径补充（2026-10-16）
 
-当前线上使用 BM25 关键词召回、有限模糊召回和 Neo4j 条件过滤，使用 RRF 排序。embedding/Zilliz dense 当前关闭，健康检查中的 `dense` 为 `null`。主题和基金名称也参与关键词检索。
+以下说明只补充当前实现状态，不改变本手册前述接口路径、参数和返回字段要求。
 
-请求示例：
+### 检索链路
 
-```json
-{
-  "query": "2022年以后关于图神经网络的论文",
-  "top_k": 10,
-  "year_gte": 2022,
-  "year_lte": 2026,
-  "conference": ["AAAI"],
-  "author": [],
-  "keyword": [],
-  "subject": []
-}
-```
+- `/api/retrieval/search` 当前默认使用 SQLite FTS5/BM25，结合 Neo4j 条件过滤和关系扩展。
+- embedding/Zilliz 代码仍保留，但当前线上关闭 dense 召回；`retrieval_mode` 以实际响应为准，当前通常为 `bm25` 或 BM25 与模糊召回组合，不应假定一定包含 dense。
+- 论文检索数据来自 SQLite；Neo4j 负责图谱关系和过滤；MySQL 不作为论文检索主库。
 
-参数说明：
+### 基金接口口径
 
-| 参数 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `query` | string | 是 | 查询内容 |
-| `top_k` | integer | 否 | 返回数量，默认 10，建议不超过 20 |
-| `year_gte` | integer | 否 | 最早发表年份 |
-| `year_lte` | integer | 否 | 最晚发表年份 |
-| `conference` | string[] | 否 | 会议名称列表 |
-| `author` | string[] | 否 | 作者列表 |
-| `keyword` | string[] | 否 | 关键词列表 |
-| `subject` | string[] | 否 | 主题过滤列表，对应结果中的 `subjects` |
+- `/api/retrieval/fundings/search` 与 `/api/retrieval/search/by-funding` 现在使用相同的 SQLite 基金映射、主论文范围、大小写不敏感片段匹配和去重规则。
+- `/fundings/search` 返回的是匹配到的具体基金实体列表，每个实体有自己的 `paper_count`。
+- `/search/by-funding` 返回匹配基金对应论文的去重结果并集。因此多个候选基金的 `paper_count` 直接相加，可能大于论文检索结果总数。
 
-按基金查找时，将基金名称写入 `query`；目前没有独立的 `funding` 过滤参数。
+### 产品 Topic 接口
 
-也可以使用 GET 快速查询：
-
-```http
-GET /api/retrieval/search?q=graph%20neural%20network&top_k=10
-```
-
-返回示例：
-
-以下使用库中带基金信息的论文；作者、关键词、主题仅展示部分内容，摘要及诊断信息已省略：
-
-```json
-{
-  "results": [
-    {
-      "paper_id": "paper:2303.08250v5",
-      "title": "CHEEM: Continual Learning by Reuse, New, Adapt and Skip...",
-      "abstract": "To effectively manage the complexities of real-world dynamic environments...",
-      "conference": "CVPR",
-      "year": 2026,
-      "authors": ["Chinmay Savadikar", "Michelle Dai", "Tianfu Wu"],
-      "keywords": ["continual learning", "exemplar-free class-incremental learning"],
-      "subjects": ["continual learning", "neural architecture search"],
-      "funding": ["ARO Grant W911NF1810295", "NSF award CMMI-2024688"],
-      "image_id": "2303.08250v5.png",
-      "score": 0.022886949116457313,
-      "rank": 4,
-      "source_scores": {
-        "bm25_raw": 55.81359393987477,
-        "bm25_rank": 1,
-        "bm25_rrf": 0.01639344262295082,
-        "dense_raw": 0.5737422704696655,
-        "dense_rank": 94,
-        "dense_rrf": 0.006493506493506494,
-        "rrf": 0.022886949116457313
-      },
-      "retrieval_mode": "bm25"
-    }
-  ],
-  "state": {},
-  "query_parse": {},
-  "query_rewrite": {}
-}
-```
-
-结果已按相关性排序。建议使用返回顺序或 `rank`，不要把 `score` 当成百分比。
-
-- `subjects`：来自图谱 Topic 的主题，字段名仍为 `subjects`。
-- `funding`：基金名称列表。作者、关键词、主题和基金缺失时返回 `[]`。
-- `authors`：部分作者由图谱关系回填，列表顺序不保证是论文署名顺序。
-- `image_id`：图片文件名，例如 `2305.14299v3.png`；无图为 `null`。可拼接图片 CDN 地址，不是图片二进制或完整 URL。
-- `source_scores`、`retrieval_mode`：各路召回评分及实际使用的检索方式。
-- `state`、`query_parse`、`query_rewrite`：检索过程、条件解析和查询改写信息，普通展示可忽略，实际返回不一定为空。
-
-### 多步关系检索
+产品 Topic 字段要求保持不变，新增以下实现接口：
 
 ```http
-POST /api/retrieval/multistep-search
+GET /api/v1/topics?enabled=true&category=机器学习&limit=100&offset=0
+GET /api/v1/topics/{topicId}
+GET /api/v1/topics/{topicId}/papers?limit=20&offset=0
 ```
 
-用于包含作者、主题或其他关系约束的复杂查询。
+返回字段保持产品要求：`id`、`imagePath`、`nameZh`、`nameEn`、`descriptionZh`、`descriptionEn`、`category`、`subjectQuery`、`paperCount`、`enabled`。
 
-```json
-{
-  "query": "查找同一作者在相同主题下的其他论文",
-  "top_k": 10,
-  "max_steps": 6
-}
-```
-
-普通论文搜索优先使用 `/api/retrieval/search`。
-
-## 3. 学者检索
-
-按姓名模糊搜索学者：
+### 产品 Scholar 接口
 
 ```http
-GET /api/retrieval/scholars/search?q=Marcel%20Binz&limit=20&offset=0
+GET /api/v1/scholars/search?q=Marcel&limit=20&offset=0
+GET /api/v1/scholars/{scholarId}
+GET /api/v1/scholars/{scholarId}/papers?limit=20&offset=0
 ```
 
-返回稳定的 `scholar_id` 和论文数。使用该 ID 获取学者画像：
+学者详情字段保持产品要求：`scholar_id`、`name_zh`、`name_en`、`avatar_path`、`affiliations`、`bio_zh`、`bio_en`、`metrics`、`annual_citations`、`updated_at`。引用统计同时保留 `citation_meta`，用于记录来源、覆盖范围和统计截至日期。
 
-```http
-GET /api/retrieval/scholars/{scholar_id}
-```
+- `metrics.paper_count` 按关联论文 ID 去重统计。
+- 论文列表复用现有论文库，不创建第二套论文数据。
+- Neo4j 全文作者索引不可用时，学者搜索自动降级为大小写不敏感的姓名包含匹配。
+- 缺失的简介、机构、头像和引用统计返回空值；不会根据姓名猜测或编造资料。
 
-画像包含论文数、年份、会议、主题、基金、机构、合作者和论文列表。`scholar_id` 必须使用搜索结果中的值，不要用姓名代替，以避免同名作者混淆。
+### 当前数据状态
 
-## 4. 论文详情
+Topic/Scholar 元数据表和接口已经建立，但产品目录、简介、机构、头像及引用统计仍需产品侧提供正式数据后导入。导入元数据不会改变现有论文 ID 或论文库。
 
-```http
-GET /api/kg/paper?paperId={paper_id}
-```
+### 当前验证
 
-`paper_id` 从论文检索结果中取得。调用时需要进行 URL 编码。
-
-示例：
-
-```js
-const url = `http://158.247.231.197:18088/api/kg/paper?paperId=${encodeURIComponent(paperId)}`;
-const response = await fetch(url);
-const paper = await response.json();
-```
-
-返回示例：
-
-```json
-{
-  "paper_id": "paper:17203_aaai:911ff38f19e8",
-  "title": "...",
-  "authors": [],
-  "year": 2021,
-  "venue": "AAAI",
-  "abstract": "...",
-  "doi": "...",
-  "pdf_url": "..."
-}
-```
-
-## 4. 引用和知识图谱
-
-```http
-GET /api/kg/graph?paperId={paper_id}&depth=1&includeReferenceStubs=false
-```
-
-参数：
-
-| 参数 | 必填 | 说明 |
-| --- | --- | --- |
-| `paperId` | 是 | 检索结果中的论文 ID |
-| `depth` | 否 | 图谱展开深度，可选 1 至 3，建议使用 1 |
-| `includeReferenceStubs` | 否 | 是否包含 `reference_stub` 占位节点，默认 `false` |
-
-返回示例：
-
-```json
-{
-  "rootId": "当前论文ID",
-  "nodes": [],
-  "lines": [
-    {
-      "from": "论文A",
-      "to": "论文B",
-      "text": "CITES",
-      "data": {
-        "type": "CITES"
-      }
-    }
-  ]
-}
-```
-
-引用方向：
-
-- `from` 是当前论文 ID：当前论文引用了 `to` 对应的论文。
-- `to` 是当前论文 ID：`from` 对应的论文引用了当前论文。
-
-图谱还可能返回作者、机构、方法、基金、主题和会议等节点及关系。
-
-## 5. 简单标题检索
-
-```http
-GET /api/kg/search?q={关键词}&limit=20
-```
-
-用于在知识图谱中按论文标题查找论文。
-
-| 参数 | 说明 |
-| --- | --- |
-| `q` | 标题关键词 |
-| `limit` | 返回数量，范围 1 至 50，默认 20 |
-
-需要检索标题和摘要时，应使用 `/api/retrieval/search`。
-
-## 6. 论文和会议信息
-
-### 论文列表
-
-```http
-GET /api/papers
-```
-
-可选参数：
-
-```text
-q, conference, year, track, limit, offset
-```
-
-示例：
-
-```http
-GET /api/papers?q=graph&conference=AAAI&year=2024&limit=20&offset=0
-```
-
-### 其他信息
-
-```http
-GET /api/papers/venues
-GET /api/papers/tracks?conference=AAAI
-GET /api/categories
-GET /api/conferences
-```
-
-`/api/papers`、`/api/papers/venues` 和 `/api/papers/tracks` 支持 `record_type=canonical`（默认）、`external_full` 或 `all`。`/api/categories` 返回会议 YAML 的分类筛选项，不是论文 Topic。
-
-## 7. 用户和收藏
-
-```http
-POST   /api/auth/register
-POST   /api/auth/login
-POST   /api/auth/logout
-GET    /api/auth/me
-GET    /api/favorites
-POST   /api/favorites
-DELETE /api/favorites/{conferenceId}
-```
-
-登录请求示例：
-
-```json
-{
-  "username": "username",
-  "password": "password"
-}
-```
-
-添加收藏：
-
-```json
-{
-  "conferenceId": "conference-id"
-}
-```
-
-登录状态使用 Cookie。浏览器请求需要设置：
-
-```js
-fetch(url, {
-  credentials: "include"
-});
-```
-
-## 8. 服务状态
-
-```http
-GET /api/health
-GET /api/retrieval/health
-GET /api/retrieval/ready
-```
-
-- `/api/health`：检查主业务服务，并返回 SQLite 的 `recordCounts`。
-- `/api/retrieval/health`：检查检索服务进程、BM25、Neo4j 和 dense 状态。
-- `/api/retrieval/ready`：检查检索服务是否准备完成；就绪时 `ready=true`。
-
-## 9. 状态码
-
-| 状态码 | 说明 |
-| --- | --- |
-| `200` | 请求成功 |
-| `201` | 创建成功 |
-| `400` | 参数错误或缺少必填参数 |
-| `401` | 未登录或认证失败 |
-| `404` | 论文或资源不存在 |
-| `413` | 请求内容过大 |
-| `429` | 请求过于频繁 |
-| `500` | 服务内部错误 |
-| `503` | 服务暂时不可用 |
-
-建议将请求超时设置为 30 秒。遇到 `500` 或 `503` 时，可以间隔一段时间重试 1 至 2 次；`400` 和 `404` 不需要重试。
-
-## 产品 Topic / Scholar 接口（v1）
-
-- `GET /api/v1/topics?enabled=true&category=机器学习&limit=100&offset=0`：返回产品 Topic 目录及论文数。
-- `GET /api/v1/topics/{topicId}`：返回 Topic 详情。
-- `GET /api/v1/topics/{topicId}/papers?limit=20&offset=0`：返回该 Topic 的主论文。
-- `GET /api/v1/scholars/search?q=Marcel&limit=20&offset=0`：按学者姓名搜索；全文索引不可用时自动使用大小写不敏感的包含匹配。
-- `GET /api/v1/scholars/{scholarId}`：返回学者资料、机构、论文数和可用引用统计。
-- `GET /api/v1/scholars/{scholarId}/papers?limit=20&offset=0`：返回学者论文。
-
-产品元数据通过 `retrieval_backend/load_product_metadata.py` 导入；缺失的画像、引用或机构数据返回空值，不生成虚假统计。
-
-## 基金检索口径
-
-`/api/retrieval/fundings/search` 与 `/api/retrieval/search/by-funding` 现在共享 SQLite 的基金映射、主论文范围、大小写不敏感子串匹配和去重规则。候选基金仍按具体基金名称逐项返回，论文检索按匹配基金的论文并集统计，因此单项 `paper_count` 之和可能大于论文并集数量。
+- Node API、Python 检索服务、Neo4j 和 Nginx 均已启用。
+- `/api/health`、`/api/retrieval/health`、Topic、Scholar 和基金接口已完成线上 smoke test。
+- 增量更新及产品元数据测试：18 项通过，2 项真实 Neo4j 测试因未设置 `LIVE_INCREMENTAL_TEST=1` 跳过。
