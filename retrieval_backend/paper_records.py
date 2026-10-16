@@ -26,8 +26,12 @@ BUSINESS_COLUMNS = {
     'bibsource': "TEXT NOT NULL DEFAULT ''",
     'source_file': "TEXT NOT NULL DEFAULT ''",
     'image_id': 'TEXT',
+    'published_at': 'TEXT',
+    'citation_count': 'INTEGER',
+    'cover_path': 'TEXT',
 }
 BUSINESS_FIELDS = tuple(k for k in BUSINESS_COLUMNS if k not in {'external', 'record_type', 'image_id'})
+BUSINESS_NUMERIC_FIELDS = {'business_id', 'citation_count'}
 
 
 def classify_paper(props, *, is_main=False):
@@ -56,7 +60,7 @@ def ensure_business_schema(conn):
 def business_values(doc):
     result = {name: doc.get(name) for name in BUSINESS_FIELDS}
     for name in BUSINESS_FIELDS:
-        if name != 'business_id':
+        if name not in BUSINESS_NUMERIC_FIELDS and name not in {'published_at', 'cover_path'}:
             result[name] = str(result[name] or '')
     if 'editor' in doc:
         result['editor_json'] = json.dumps(doc['editor'], ensure_ascii=False)

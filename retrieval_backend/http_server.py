@@ -192,13 +192,14 @@ def make_handler(
                     self._send(500, {"error": "scholar search failed", "type": type(exc).__name__})
                 return
             if request_path == "/fundings/search":
-                if graph is None or not hasattr(graph, "funding_search"):
+                lexical = getattr(index, "lexical_index", index)
+                if not hasattr(lexical, "funding_search"):
                     self._send(503, {"error": "funding search unavailable"})
                     return
                 params = parse_qs(urlparse(self.path).query)
                 query = (_one(params, "q") or _one(params, "query") or "").strip()
                 try:
-                    rows = graph.funding_search(
+                    rows = lexical.funding_search(
                         query, limit=int(_one(params, "limit") or 20),
                         offset=int(_one(params, "offset") or 0),
                     )

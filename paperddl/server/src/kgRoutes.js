@@ -48,7 +48,7 @@ const graphCache = new Map();
 const GRAPH_CACHE_TTL_MS = 10_000;
 const MAX_GRAPH_CACHE_ENTRIES = 64;
 
-const driver = neo4j.driver(
+export const driver = neo4j.driver(
   process.env.NEO4J_URI || "bolt://neo4j:7687",
   neo4j.auth.basic(process.env.NEO4J_USER || "neo4j", process.env.NEO4J_PASSWORD || "")
 );

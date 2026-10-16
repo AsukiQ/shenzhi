@@ -21,9 +21,11 @@ from typing import Any, Iterable, Mapping
 try:
     from .funding_cleanup import clean_funding_name
     from .paper_records import BUSINESS_FIELDS, SEARCH_SCOPES, ensure_business_schema, business_values
+    from .product_schema import ensure_product_schema
 except ImportError:
     from funding_cleanup import clean_funding_name
     from paper_records import BUSINESS_FIELDS, SEARCH_SCOPES, ensure_business_schema, business_values
+    from product_schema import ensure_product_schema
 
 
 SCHEMA = """
@@ -40,6 +42,9 @@ CREATE TABLE IF NOT EXISTS papers (
     subjects_json TEXT NOT NULL,
     funding_json TEXT NOT NULL DEFAULT '[]',
     image_id TEXT,
+    published_at TEXT,
+    citation_count INTEGER,
+    cover_path TEXT,
     record_type TEXT NOT NULL DEFAULT 'canonical',
     external INTEGER NOT NULL DEFAULT 0
 );
@@ -260,9 +265,16 @@ class PaperSearchIndex:
             conn.executescript(SCHEMA)
             ensure_business_schema(conn)
             columns = {r[1] for r in conn.execute('PRAGMA table_info(papers)')}
-            for name, definition in [('funding_json', "TEXT NOT NULL DEFAULT '[]'"), ('image_id', 'TEXT')]:
+            for name, definition in [
+                ('funding_json', "TEXT NOT NULL DEFAULT '[]'"),
+                ('image_id', 'TEXT'),
+                ('published_at', 'TEXT'),
+                ('citation_count', 'INTEGER'),
+                ('cover_path', 'TEXT'),
+            ]:
                 if name not in columns:
                     conn.execute(f'ALTER TABLE papers ADD COLUMN {name} {definition}')
+            ensure_product_schema(conn)
         else:
             conn.execute("PRAGMA query_only=ON")
         return conn
@@ -332,12 +344,16 @@ class PaperSearchIndex:
                     year = int(year) if year not in (None, "") else None
                     cur = conn.execute(
                         """INSERT OR REPLACE INTO papers
-                        (paper_id,source_id,title,abstract,conference,year,authors_json,keywords_json,subjects_json,funding_json,image_id)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        (paper_id,source_id,title,abstract,conference,year,authors_json,keywords_json,
+                         subjects_json,funding_json,image_id,published_at,citation_count,cover_path)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (paper_id, doc.get("source_id"), doc.get("title", ""),
                          doc.get("abstract", ""), doc.get("conference"), year,
                          json.dumps(authors, ensure_ascii=False), json.dumps(keywords, ensure_ascii=False),
-                         json.dumps(subjects, ensure_ascii=False), json.dumps(funding, ensure_ascii=False), doc.get('image_id')),
+                         json.dumps(subjects, ensure_ascii=False), json.dumps(funding, ensure_ascii=False),
+                         doc.get('image_id'), doc.get('published_at') or doc.get('publishedAt'),
+                         doc.get('citation_count') if doc.get('citation_count') is not None else doc.get('citationCount'),
+                         doc.get('cover_path') or doc.get('coverPath')),
                     )
                     record_type = doc.get('record_type') or ('reference_stub' if doc.get('external') is True else 'canonical')
                     values = business_values(doc)
@@ -634,6 +650,24 @@ class PaperSearchIndex:
             if limit is not None and len(results) >= limit:
                 break
         return results
+
+    def funding_search(self, query="", *, limit=20, offset=0):
+        """Funding candidates and counts from the same canonical SQLite relations."""
+        import hashlib
+        limit, offset = int(limit), int(offset)
+        if not 1 <= limit <= 100 or offset < 0:
+            raise ValueError("limit must be 1..100 and offset must be >= 0")
+        key = str(query or "").strip().casefold()
+        # instr performs literal substring matching (including %, _ and backslashes).
+        rows = self.read_connection().execute(
+            """SELECT min(m.value) AS name, m.value_key, count(DISTINCT m.paper_id) AS paper_count
+            FROM paper_funding m CROSS JOIN papers p ON p.paper_id=m.paper_id
+            WHERE p.record_type='canonical' AND instr(m.value_key,?) > 0
+            GROUP BY m.value_key ORDER BY paper_count DESC,m.value_key LIMIT ? OFFSET ?""",
+            (key, limit, offset),
+        ).fetchall()
+        return [dict(funding_id="funding:name:" + hashlib.sha256(row["value_key"].encode()).hexdigest()[:24],
+                     name=row["name"], paper_count=int(row["paper_count"])) for row in rows]
 
     def subject_page(self, subject: str, *, offset: int = 0, limit: int = 10) -> tuple[list[SearchResult], int]:
         """Return a subject page without invoking lexical or dense recall."""

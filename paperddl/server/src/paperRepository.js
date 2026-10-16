@@ -22,7 +22,7 @@ function parseJsonArray(value) {
   }
 }
 
-function toPaper(row) {
+export function toPaper(row) {
   return {
     id: Number(row.row_id),
     paper_id: row.paper_id,
@@ -49,6 +49,10 @@ function toPaper(row) {
     source_file: row.source_file || "",
     funding: parseJsonArray(row.funding_json),
     image_id: row.image_id || null,
+    published_at: row.published_at || null,
+    citation_count: row.citation_count === null || row.citation_count === undefined
+      ? null : Number(row.citation_count),
+    cover_path: row.cover_path || null,
     record_type: row.record_type || "external_full",
     external: Number(row.external || 0) === 1
   };

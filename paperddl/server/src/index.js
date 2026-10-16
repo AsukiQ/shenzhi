@@ -39,6 +39,7 @@ import {
 } from "./paperRepository.js";
 import { paperHealthcheck } from "./paperDb.js";
 import { registerKgRoutes } from "./kgRoutes.js";
+import { registerProductRoutes } from "./productRoutes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,6 +82,7 @@ app.use((req, res, next) => {
 });
 
 registerKgRoutes(app);
+registerProductRoutes(app);
 
 app.get("/api/health", (_req, res) => {
   try {
