@@ -39,14 +39,12 @@
 |**服务健康检查**<br>部署上线、监控巡检时确认主业务服务与检索服务是否正常、是否就绪。|GET|`/api/health`|检查主业务服务是否正常。|无参数。|服务健康状态。|
 ||GET|`/api/retrieval/health`|检查检索服务进程是否存活。|无参数。|进程健康状态。|
 ||GET|`/api/retrieval/ready`|检查检索服务是否加载完成、可对外服务。|无参数。|就绪状态。|
-
 |**主题库**<br>产品按 Topic 浏览主题及关联论文。|GET|`/api/v1/topics?enabled=true&category={category}&limit=100&offset=0`|返回 Topic 列表及分页信息。|**参数：**<br>enabled (可选) true、false 或 all<br>category (string, 可选) 一级分类<br>limit (int, 默认100, 最大200)<br>offset (int, 默认0, ≥0)|`{"items":[{"id":"deep-learning","imagePath":"/images/topics/default.png","nameZh":"深度学习","nameEn":"Deep Learning","descriptionZh":"...","descriptionEn":"...","category":"机器学习","subjectQuery":"deep learning","paperCount":0,"enabled":true}],"total":0,"limit":100,"offset":0}`|
 ||GET|`/api/v1/topics/{topicId}`|获取 Topic 详情。|topicId 为产品内部稳定 Topic ID。|返回字段：id、imagePath、nameZh、nameEn、descriptionZh、descriptionEn、category、subjectQuery、paperCount、enabled。|
 ||GET|`/api/v1/topics/{topicId}/papers?limit=20&offset=0`|获取 Topic 关联的主论文列表。|topicId 必填；limit (int, 默认20, 最大200)；offset (int, 默认0, ≥0)。|`{"items":[...],"total":0,"limit":20,"offset":0}`|
 |**产品学者库**<br>按学者稳定 ID获取画像及论文。|GET|`/api/v1/scholars/search?q={姓名}&limit=20&offset=0`|按姓名搜索学者，返回稳定 scholar_id 和论文数。|**参数：**<br>q (string, 必填)<br>limit (int, 默认20, 最大100)<br>offset (int, 默认0, ≥0)|`{"items":[{"scholar_id":"author:...","name_zh":null,"name_en":"Marcel Kockmann","avatar_path":null,"metrics":{"paper_count":11,"citation_count":null}}],"limit":20,"offset":0}`|
 ||GET|`/api/v1/scholars/{scholarId}`|获取产品学者详情。|scholarId 必须使用搜索结果返回的稳定 ID，不要用姓名代替。|返回 scholar_id、name_zh、name_en、avatar_path、affiliations、bio_zh、bio_en、metrics、annual_citations、updated_at、citation_meta。|
 ||GET|`/api/v1/scholars/{scholarId}/papers?limit=20&offset=0`|获取学者关联的论文列表。|scholarId 必填；limit (int, 默认20, 最大200)；offset (int, 默认0, ≥0)。|`{"items":[...],"total":0,"limit":20,"offset":0}`；论文数据复用论文库，不重复保存。|
-
 
 ## 状态码
 
