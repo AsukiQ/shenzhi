@@ -330,3 +330,18 @@ GET /api/retrieval/ready
 | `503` | 服务暂时不可用 |
 
 建议将请求超时设置为 30 秒。遇到 `500` 或 `503` 时，可以间隔一段时间重试 1 至 2 次；`400` 和 `404` 不需要重试。
+
+## 产品 Topic / Scholar 接口（v1）
+
+- `GET /api/v1/topics?enabled=true&category=机器学习&limit=100&offset=0`：返回产品 Topic 目录及论文数。
+- `GET /api/v1/topics/{topicId}`：返回 Topic 详情。
+- `GET /api/v1/topics/{topicId}/papers?limit=20&offset=0`：返回该 Topic 的主论文。
+- `GET /api/v1/scholars/search?q=Marcel&limit=20&offset=0`：按学者姓名搜索；全文索引不可用时自动使用大小写不敏感的包含匹配。
+- `GET /api/v1/scholars/{scholarId}`：返回学者资料、机构、论文数和可用引用统计。
+- `GET /api/v1/scholars/{scholarId}/papers?limit=20&offset=0`：返回学者论文。
+
+产品元数据通过 `retrieval_backend/load_product_metadata.py` 导入；缺失的画像、引用或机构数据返回空值，不生成虚假统计。
+
+## 基金检索口径
+
+`/api/retrieval/fundings/search` 与 `/api/retrieval/search/by-funding` 现在共享 SQLite 的基金映射、主论文范围、大小写不敏感子串匹配和去重规则。候选基金仍按具体基金名称逐项返回，论文检索按匹配基金的论文并集统计，因此单项 `paper_count` 之和可能大于论文并集数量。
