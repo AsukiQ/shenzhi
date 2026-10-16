@@ -47,6 +47,7 @@
 ||GET|`/api/v1/scholars/{scholarId}`|获取产品学者详情。|scholarId 必须使用搜索结果返回的稳定 ID，不要用姓名代替。|返回 scholar_id、name_zh、name_en、avatar_path、affiliations、bio_zh、bio_en、metrics、annual_citations、updated_at、citation_meta。|
 ||GET|`/api/v1/scholars/{scholarId}/papers?limit=20&offset=0`|获取学者关联的论文列表。|scholarId 必填；limit (int, 默认20, 最大200)；offset (int, 默认0, ≥0)。|`{"items":[...],"total":0,"limit":20,"offset":0}`；论文数据复用论文库，不重复保存。|
 
+
 ## 状态码
 
 |**状态码**|**说明**|
