@@ -589,3 +589,28 @@ systemctl --user reload paperddl-nginx.service
 3. 外部 Paper 节点的标题、年份和来源字段完整性。
 4. 引用边两端是否都能对应有效论文。
 5. Topic、Author、Institution 的规范化和重复实体情况。
+
+## 六、2026-10-16 最近更新记录
+
+### 架构与数据职责
+
+- 论文检索主库统一使用 SQLite `papers_fts.db`，包含论文、FTS/BM25、主题、基金映射和产品元数据表。
+- MySQL 保留给用户、登录、收藏等业务数据；迁移包中的旧 MySQL 论文表仅作为历史备份，不作为线上论文检索来源。
+- Neo4j 继续负责论文图谱、作者、机构、基金、主题和引用关系，不复制第二套论文资料。
+- embedding/Zilliz 继续关闭，核心检索不依赖外部 embedding 上游。
+
+### 接口与口径修复
+
+- `/api/retrieval/fundings/search` 改为与 `/api/retrieval/search/by-funding` 共享 SQLite 基金映射、主论文范围、大小写不敏感匹配和去重口径。
+- 增加 Topic 产品接口：`/api/v1/topics`、`/api/v1/topics/{topicId}`、`/api/v1/topics/{topicId}/papers`。
+- 增加 Scholar 产品接口：`/api/v1/scholars/search`、`/api/v1/scholars/{scholarId}`、`/api/v1/scholars/{scholarId}/papers`。
+- Scholar 搜索在 Neo4j 全文索引不存在时自动降级到名称包含匹配，避免接口因索引缺失失败。
+- 产品元数据缺失时返回空值，不自动编造简介、头像、机构或引用统计。
+
+### 更新、部署和验证
+
+- 增量导入继续支持幂等重放、断点恢复、SQLite/FTS 更新、Neo4j 关系替换和图片 manifest 更新。
+- 本次回归测试：18 项通过，2 项真实 Neo4j 集成测试因未设置 `LIVE_INCREMENTAL_TEST=1` 跳过。
+- Node、Retrieval、Neo4j、Nginx 用户服务均保持 enabled；线上健康检查和主要接口 smoke test 通过。
+- GitHub 最新提交：`9ddea75`。
+- 当前 Topic/Scholar 产品元数据表已建立，但尚未导入产品侧真实目录和画像数据；导入后接口即可返回真实内容。
