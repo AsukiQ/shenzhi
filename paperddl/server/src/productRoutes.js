@@ -4,6 +4,7 @@ import {
   getScholarProfile,
   getTopic,
   listScholarPapers,
+  searchScholarProfiles,
   listTopicPapers,
   listTopics
 } from "./productRepository.js";
@@ -107,7 +108,7 @@ async function searchScholars(query, limit, offset) {
         SKIP $offset LIMIT $limit
       `, params));
     }
-    return result.records.map((record) => {
+    const items = result.records.map((record) => {
       const row = record.toObject();
       return {
         scholar_id: row.scholar_id,
@@ -117,6 +118,15 @@ async function searchScholars(query, limit, offset) {
         metrics: { paper_count: Number(row.paper_count?.toNumber?.() ?? row.paper_count ?? 0), citation_count: null }
       };
     });
+    const profileItems = searchScholarProfiles(query, {limit, offset}).map((row) => ({
+      scholar_id: row.scholar_id,
+      name_zh: row.name_zh ?? null,
+      name_en: row.name_en || row.scholar_id,
+      avatar_path: row.avatar_path ?? null,
+      metrics: { paper_count: 0, citation_count: row.citation_count == null ? null : Number(row.citation_count) }
+    }));
+    const seen = new Set(items.map((item) => item.scholar_id));
+    return [...profileItems.filter((item) => !seen.has(item.scholar_id)), ...items].slice(0, limit);
   } finally {
     await session.close();
   }
@@ -179,9 +189,11 @@ export function registerProductRoutes(app) {
       const scholarId = String(req.params.scholarId || "").trim();
       if (!scholarId) return res.status(400).json({ message: "scholar_id is required" });
       const graph = await scholarGraph(scholarId);
-      if (!graph) return res.status(404).json({ message: "Scholar not found" });
-      graph.paper_count = listScholarPapers(await scholarPaperIds(scholarId), {limit:1}).total;
-      return res.json(productScholar(getScholarProfile(scholarId), graph));
+      if (!graph && !getScholarProfile(scholarId).profile) return res.status(404).json({ message: "Scholar not found" });
+      const profile = getScholarProfile(scholarId);
+      const base = graph || { scholar_id: scholarId, name: profile.profile?.name_en || scholarId, paper_count: 0 };
+      if (graph) base.paper_count = listScholarPapers(await scholarPaperIds(scholarId), {limit:1}).total;
+      return res.json(productScholar(profile, base));
     } catch (error) {
       return res.status(error.status || 500).json({ message: "Failed to load product scholar", error: error.message });
     }
@@ -192,7 +204,11 @@ export function registerProductRoutes(app) {
       const scholarId = String(req.params.scholarId || "").trim();
       if (!scholarId) return res.status(400).json({ message: "scholar_id is required" });
       const graph = await scholarGraph(scholarId);
-      if (!graph) return res.status(404).json({ message: "Scholar not found" });
+      if (!graph && !getScholarProfile(scholarId).profile) return res.status(404).json({ message: "Scholar not found" });
+      if (!graph) return res.json(listScholarPapers([], {
+        limit: pageParam(req.query.limit, 20),
+        offset: pageParam(req.query.offset, 0)
+      }));
       return res.json(listScholarPapers(await scholarPaperIds(scholarId), {
         limit: pageParam(req.query.limit, 20),
         offset: pageParam(req.query.offset, 0)

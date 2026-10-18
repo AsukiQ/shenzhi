@@ -17,3 +17,4 @@
 ## 迁移包内容
 
 完整迁移包必须包含：`repository/`、`database-backup/`、`primary_papers.jsonl`、`shenzhi-images-20261015.tar.zst`、迁移说明和校验文件。图片归档是完整项目迁移的一部分，不可省略。
+- **学者库首批数据**：已导入 OpenAlex 学者 `openalex:A5000000004`（Şaziye Melike IŞIK），包含机构、总引用 46、2022—2026 年度引用和 OpenAlex 来源信息；当前尚未与 Neo4j 作者节点建立论文关联，因此 `paper_count=0`，论文列表为空。
