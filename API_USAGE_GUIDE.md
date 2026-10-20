@@ -43,8 +43,8 @@
 ||GET|`/api/v1/topics/{topicId}`|获取 Topic 详情。|topicId 为产品内部稳定 Topic ID。|返回字段：id、imagePath、nameZh、nameEn、descriptionZh、descriptionEn、category、subjectQuery、paperCount、enabled。|
 ||GET|`/api/v1/topics/{topicId}/papers?limit=20&offset=0`|获取 Topic 关联的主论文列表。|topicId 必填；limit (int, 默认20, 最大200)；offset (int, 默认0, ≥0)。|`{"items":[...],"total":0,"limit":20,"offset":0}`|
 |**产品学者库**<br>按学者稳定 ID获取画像及论文。|GET|`/api/v1/scholars/search?q={姓名}&limit=20&offset=0`|按姓名搜索学者，返回稳定 scholar_id 和论文数；结果可来自 Neo4j 作者节点或已导入的产品学者画像。|**参数：**<br>q (string, 必填)<br>limit (int, 默认20, 最大100)<br>offset (int, 默认0, ≥0)|`{"items":[{"scholar_id":"author:...","name_zh":null,"name_en":"Marcel Kockmann","avatar_path":null,"metrics":{"paper_count":11,"citation_count":null}}],"limit":20,"offset":0}`|
-||GET|`/api/v1/scholars/{scholarId}`|获取产品学者详情。|scholarId 必须使用搜索结果返回的稳定 ID，不要用姓名代替。|返回 scholar_id、name_zh、name_en、avatar_path、affiliations、bio_zh、bio_en、metrics、annual_citations、updated_at、citation_meta。学者画像可以在暂未关联 Neo4j 作者节点时返回；此时 paper_count 只统计平台论文库中的关联论文，可能为 0。|
-||GET|`/api/v1/scholars/{scholarId}/papers?limit=20&offset=0`|获取学者关联的论文列表。|scholarId 必填；limit (int, 默认20, 最大200)；offset (int, 默认0, ≥0)。|`{"items":[...],"total":0,"limit":20,"offset":0}`；论文数据复用论文库，不重复保存。OpenAlex 等外部来源的作品未匹配到平台论文 ID 时不会直接计入列表。|
+||GET|`/api/v1/scholars/{scholarId}`|获取产品学者详情。|scholarId 必须使用搜索结果返回的稳定 ID，不要用姓名代替。|返回 scholar_id、name_zh、name_en、avatar_path、affiliations、bio_zh、bio_en、metrics、annual_citations、updated_at、citation_meta。学者画像可以在暂未关联 Neo4j 作者节点时返回；paper_count 统计图谱关联与已确认的外部 DOI 关联所对应的平台论文去重并集，可能为 0；citation_meta.as_of 未知时为 null，不用源记录更新时间代替。|
+||GET|`/api/v1/scholars/{scholarId}/papers?limit=20&offset=0`|获取学者关联的论文列表。|scholarId 必填；limit (int, 默认20, 最大200)；offset (int, 默认0, ≥0)。|`{"items":[...],"total":0,"limit":20,"offset":0}`；论文数据复用论文库，不重复保存。OpenAlex 等外部来源的作品通过规范化 DOI 精确匹配平台论文 ID 后可建立关联；未匹配的作品不会直接计入列表。|
 
 ## 状态码
 

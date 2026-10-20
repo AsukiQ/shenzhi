@@ -64,7 +64,7 @@ def _scholar(row):
     affiliations = []
     for item in row.get("affiliations") or []:
         institution = _text(item.get("institution"))
-        if institution:
+        if institution and (institution, _text(item.get("position"))) not in affiliations:
             affiliations.append((institution, _text(item.get("position"))))
     annual = []
     for item in row.get("annual_citations") or row.get("annualCitations") or []:

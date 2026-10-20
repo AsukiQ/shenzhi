@@ -20,6 +20,7 @@ def copy_product_overlay(source, target):
         'scholar_profiles': 'scholar_id,name_zh,name_en,avatar_path,bio_zh,bio_en,citation_count,citation_source,citation_coverage,citation_as_of,updated_at',
         'scholar_affiliations': 'scholar_id,institution,position',
         'scholar_citations': 'scholar_id,year,count',
+        'scholar_paper_links': 'scholar_id,paper_id,source',
     }
     for table, columns in tables.items():
         try:

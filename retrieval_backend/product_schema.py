@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS scholar_affiliations (
 CREATE INDEX IF NOT EXISTS idx_scholar_affiliations_scholar
     ON scholar_affiliations(scholar_id, institution);
 
+CREATE TABLE IF NOT EXISTS scholar_paper_links (
+    scholar_id TEXT NOT NULL,
+    paper_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    PRIMARY KEY (scholar_id, paper_id),
+    FOREIGN KEY (scholar_id) REFERENCES scholar_profiles(scholar_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS scholar_citations (
     scholar_id TEXT NOT NULL,
     year INTEGER NOT NULL,

@@ -44,12 +44,15 @@ class ProductMetadataTest(unittest.TestCase):
                 "scholars": [{
                     "scholar_id": "author:test",
                     "name_en": "Alice",
-                    "affiliations": [{"institution": "Example University", "position": "Professor"}],
+                    "affiliations": [{"institution": "Example University", "position": "Professor"}] * 2,
                     "annual_citations": [{"year": 2026, "count": 4}],
                 }],
             }), encoding="utf-8")
             self.assertEqual(load(source, metadata), {"topics": 1, "scholars": 1})
             self.assertEqual(load(source, metadata), {"topics": 1, "scholars": 1})
+            with sqlite3.connect(source) as conn:
+                self.assertEqual(conn.execute('SELECT count(*) FROM scholar_affiliations').fetchone()[0], 1)
+                conn.execute("INSERT INTO scholar_paper_links VALUES ('author:test','paper:test','OpenAlex DOI')")
             target = root / "rebuilt.db"
             self.assertEqual(rebuild(source, target), 1)
             conn = sqlite3.connect(target)
@@ -58,6 +61,7 @@ class ProductMetadataTest(unittest.TestCase):
                 self.assertEqual(conn.execute("SELECT alias FROM topic_aliases").fetchone()[0], "deep learning")
                 self.assertEqual(conn.execute("SELECT position FROM scholar_affiliations").fetchone()[0], "Professor")
                 self.assertEqual(conn.execute("SELECT count FROM scholar_citations").fetchone()[0], 4)
+                self.assertEqual(conn.execute('SELECT paper_id FROM scholar_paper_links').fetchone()[0], 'paper:test')
             finally:
                 conn.close()
 

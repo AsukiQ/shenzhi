@@ -49,6 +49,9 @@ export function getScholarProfile(id) {
   const annualCitations=paperPrepare('SELECT year,count FROM scholar_citations WHERE scholar_id=? AND year BETWEEN ? AND ? ORDER BY year').all(id,year-4,year);
   return {profile,affiliations,annualCitations};
 }
+export function scholarLinkedPaperIds(id) {
+  return paperPrepare('SELECT paper_id FROM scholar_paper_links WHERE scholar_id=?').all(id).map(row => row.paper_id);
+}
 export function searchScholarProfiles(query, {limit=20, offset=0}={}) {
   limit=page(limit,20,100); offset=page(offset,0,1_000_000_000);
   const q=String(query || '').trim().toLowerCase();

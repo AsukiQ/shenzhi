@@ -5,6 +5,7 @@ import {
   getTopic,
   listScholarPapers,
   searchScholarProfiles,
+  scholarLinkedPaperIds,
   listTopicPapers,
   listTopics
 } from "./productRepository.js";
@@ -123,7 +124,7 @@ async function searchScholars(query, limit, offset) {
       name_zh: row.name_zh ?? null,
       name_en: row.name_en || row.scholar_id,
       avatar_path: row.avatar_path ?? null,
-      metrics: { paper_count: 0, citation_count: row.citation_count == null ? null : Number(row.citation_count) }
+      metrics: { paper_count: listScholarPapers(scholarLinkedPaperIds(row.scholar_id), {limit:1}).total, citation_count: row.citation_count == null ? null : Number(row.citation_count) }
     }));
     const seen = new Set(items.map((item) => item.scholar_id));
     return [...profileItems.filter((item) => !seen.has(item.scholar_id)), ...items].slice(0, limit);
@@ -192,7 +193,7 @@ export function registerProductRoutes(app) {
       if (!graph && !getScholarProfile(scholarId).profile) return res.status(404).json({ message: "Scholar not found" });
       const profile = getScholarProfile(scholarId);
       const base = graph || { scholar_id: scholarId, name: profile.profile?.name_en || scholarId, paper_count: 0 };
-      if (graph) base.paper_count = listScholarPapers(await scholarPaperIds(scholarId), {limit:1}).total;
+      base.paper_count = listScholarPapers([...scholarLinkedPaperIds(scholarId), ...(graph ? await scholarPaperIds(scholarId) : [])], {limit:1}).total;
       return res.json(productScholar(profile, base));
     } catch (error) {
       return res.status(error.status || 500).json({ message: "Failed to load product scholar", error: error.message });
@@ -205,11 +206,7 @@ export function registerProductRoutes(app) {
       if (!scholarId) return res.status(400).json({ message: "scholar_id is required" });
       const graph = await scholarGraph(scholarId);
       if (!graph && !getScholarProfile(scholarId).profile) return res.status(404).json({ message: "Scholar not found" });
-      if (!graph) return res.json(listScholarPapers([], {
-        limit: pageParam(req.query.limit, 20),
-        offset: pageParam(req.query.offset, 0)
-      }));
-      return res.json(listScholarPapers(await scholarPaperIds(scholarId), {
+      return res.json(listScholarPapers([...scholarLinkedPaperIds(scholarId), ...(graph ? await scholarPaperIds(scholarId) : [])], {
         limit: pageParam(req.query.limit, 20),
         offset: pageParam(req.query.offset, 0)
       }));
