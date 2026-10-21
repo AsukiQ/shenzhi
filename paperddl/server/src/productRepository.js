@@ -47,7 +47,10 @@ export function getScholarProfile(id) {
   const affiliations=paperPrepare('SELECT institution,position FROM scholar_affiliations WHERE scholar_id=? ORDER BY institution,position').all(id);
   const year=new Date().getUTCFullYear();
   const annualCitations=paperPrepare('SELECT year,count FROM scholar_citations WHERE scholar_id=? AND year BETWEEN ? AND ? ORDER BY year').all(id,year-4,year);
-  return {profile,affiliations,annualCitations};
+  const details=paperPrepare('SELECT * FROM scholar_details WHERE scholar_id=?').get(id);
+  return {profile,affiliations,annualCitations,
+    affiliationHistory: details ? JSON.parse(details.affiliation_history_json) : [],
+    researchImpact: details ? JSON.parse(details.research_impact_json) : {}};
 }
 export function scholarLinkedPaperIds(id) {
   return paperPrepare('SELECT paper_id FROM scholar_paper_links WHERE scholar_id=?').all(id).map(row => row.paper_id);

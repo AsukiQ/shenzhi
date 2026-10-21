@@ -21,6 +21,7 @@ def copy_product_overlay(source, target):
         'scholar_affiliations': 'scholar_id,institution,position',
         'scholar_citations': 'scholar_id,year,count',
         'scholar_paper_links': 'scholar_id,paper_id,source',
+        'scholar_details': 'scholar_id,affiliation_history_json,research_impact_json',
     }
     for table, columns in tables.items():
         try:

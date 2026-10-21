@@ -55,6 +55,20 @@ def main():
             'affiliations': [{'institution': i['display_name'], 'position': ''}
                              for i in row.get('last_known_institutions') or [] if i.get('display_name')],
             'metrics': {'citation_count': row.get('cited_by_count')},
+            'affiliation_history': [
+                {'institution_id': a.get('institution', {}).get('id'),
+                 'institution': a.get('institution', {}).get('display_name'),
+                 'years': sorted(set(a.get('years') or [])), 'position': None,
+                 'source': 'OpenAlex', 'basis': 'publication_affiliation'}
+                for a in row.get('affiliations') or [] if a.get('institution', {}).get('display_name')],
+            'research_impact': {
+                'works_count': row.get('works_count'),
+                'citation_count': row.get('cited_by_count'),
+                'h_index': (row.get('summary_stats') or {}).get('h_index'),
+                'i10_index': (row.get('summary_stats') or {}).get('i10_index'),
+                'two_year_mean_citedness': (row.get('summary_stats') or {}).get('2yr_mean_citedness'),
+                'source': 'OpenAlex', 'coverage': 'OpenAlex author record and works',
+                'as_of': None, 'source_updated_at': row.get('updated_date')},
             'annual_citations': [{'year': x['year'], 'count': x['cited_by_count']}
                                  for x in row.get('counts_by_year') or [] if x.get('cited_by_count') is not None],
             'citation_meta': {'source': 'OpenAlex', 'coverage': 'OpenAlex author record and works', 'as_of': None},

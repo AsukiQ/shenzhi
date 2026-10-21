@@ -29,3 +29,11 @@
 - 来源保留 OpenAlex，源文件更新时间不冒充引用统计截至日期，citation_meta.as_of 未知时返回 null。
 - 校验：18 项测试执行，16 项通过、2 项 Neo4j 集成测试跳过；通过 Nginx 统一入口验证学者详情、论文列表、搜索及健康接口。
 - 原始 ZIP、转换数据和导入报告保留在 /home/user2/jiansuo/，报告目录 scholar-import-20261020。
+
+## 2026-10-21
+
+- 学者详情接口新增 affiliation_history 和 research_impact，原接口路径及字段保持兼容。
+- 回填全部 2,000 位学者的历史机构年份、OpenAlex 作品数、总引用、h-index、i10-index、两年平均被引指标；缺失指标返回 null。
+- 历史机构标注 publication_affiliation，只说明署名关联年份，不推断任职起止；不以源记录更新时间冒充统计截至日期。
+- 新数据存入现有 SQLite scholar_details 表；导入和索引重建保留字段。接口手册仍使用原总览表格。
+- 回归测试 16 项通过、2 项集成测试跳过；通过 Nginx 验证详情返回及平台论文数口径。

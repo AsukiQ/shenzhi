@@ -39,6 +39,12 @@ function productScholar(profile, graph) {
       citation_count: citationCount
     },
     annual_citations: profile.annualCitations,
+    affiliation_history: profile.affiliationHistory,
+    research_impact: {
+      works_count: null, citation_count: null, h_index: null, i10_index: null,
+      two_year_mean_citedness: null, source: null, coverage: null, as_of: null,
+      source_updated_at: null, ...profile.researchImpact
+    },
     updated_at: row.updated_at ?? null,
     citation_meta: {
       source: row.citation_source ?? null,

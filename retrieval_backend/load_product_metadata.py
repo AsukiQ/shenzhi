@@ -87,6 +87,7 @@ def _scholar(row):
         "updated_at": row.get("updated_at", row.get("updatedAt")),
         "affiliations": affiliations,
         "annual": annual,
+        "details": {key: row[key] for key in ('affiliation_history', 'research_impact') if key in row},
     }
 
 
@@ -143,6 +144,12 @@ def load(db_path: Path, input_path: Path) -> dict[str, int]:
                     )),
                 )
                 conn.execute("DELETE FROM scholar_affiliations WHERE scholar_id=?", (scholar["scholar_id"],))
+                if scholar['details']:
+                    old = conn.execute('SELECT affiliation_history_json,research_impact_json FROM scholar_details WHERE scholar_id=?', (scholar['scholar_id'],)).fetchone()
+                    history = scholar['details'].get('affiliation_history', json.loads(old[0]) if old else [])
+                    impact = scholar['details'].get('research_impact', json.loads(old[1]) if old else {})
+                    conn.execute('INSERT OR REPLACE INTO scholar_details VALUES (?,?,?)',
+                                 (scholar['scholar_id'], json.dumps(history, ensure_ascii=False), json.dumps(impact, ensure_ascii=False)))
                 conn.executemany(
                     "INSERT INTO scholar_affiliations(scholar_id,institution,position) VALUES (?,?,?)",
                     [(scholar["scholar_id"], institution, position) for institution, position in scholar["affiliations"]],

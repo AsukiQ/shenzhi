@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS scholar_profiles (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS scholar_details (
+    scholar_id TEXT PRIMARY KEY,
+    affiliation_history_json TEXT NOT NULL DEFAULT '[]',
+    research_impact_json TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY (scholar_id) REFERENCES scholar_profiles(scholar_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS scholar_affiliations (
     scholar_id TEXT NOT NULL,
     institution TEXT NOT NULL,

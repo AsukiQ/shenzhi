@@ -44,6 +44,8 @@ class ProductMetadataTest(unittest.TestCase):
                 "scholars": [{
                     "scholar_id": "author:test",
                     "name_en": "Alice",
+                    "affiliation_history": [{"institution": "Example University", "years": [2022, 2024], "basis": "publication_affiliation"}],
+                    "research_impact": {"h_index": 3, "i10_index": 0, "as_of": None},
                     "affiliations": [{"institution": "Example University", "position": "Professor"}] * 2,
                     "annual_citations": [{"year": 2026, "count": 4}],
                 }],
@@ -62,6 +64,10 @@ class ProductMetadataTest(unittest.TestCase):
                 self.assertEqual(conn.execute("SELECT position FROM scholar_affiliations").fetchone()[0], "Professor")
                 self.assertEqual(conn.execute("SELECT count FROM scholar_citations").fetchone()[0], 4)
                 self.assertEqual(conn.execute('SELECT paper_id FROM scholar_paper_links').fetchone()[0], 'paper:test')
+                details = conn.execute('SELECT affiliation_history_json,research_impact_json FROM scholar_details').fetchone()
+                self.assertEqual(json.loads(details[0])[0]['years'], [2022, 2024])
+                self.assertEqual(json.loads(details[1])['i10_index'], 0)
+                self.assertIsNone(json.loads(details[1])['as_of'])
             finally:
                 conn.close()
 
